@@ -5,10 +5,14 @@ import subprocess
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Optional
+from uuid import uuid4
 
 
 class TmuxError(RuntimeError):
     pass
+
+
+SEND_KEYS_LITERAL_LIMIT = 1000
 
 
 @dataclass(frozen=True)
@@ -89,7 +93,12 @@ class TmuxClient:
 
     def send_text(self, name: str, text: str, enter: bool = True) -> None:
         if text:
-            self._run(["send-keys", "-t", name, "-l", text])
+            if len(text) <= SEND_KEYS_LITERAL_LIMIT:
+                self._run(["send-keys", "-t", name, "-l", text])
+            else:
+                buffer_name = f"agentmonitor-{uuid4().hex}"
+                self._run(["load-buffer", "-b", buffer_name, "-"], input_text=text)
+                self._run(["paste-buffer", "-d", "-b", buffer_name, "-t", name])
         if enter:
             self.send_key(name, "Enter")
 
@@ -114,12 +123,18 @@ class TmuxClient:
 
         raise TmuxError(result.stderr.strip() or f"tmux kill-session failed: {name}")
 
-    def _run(self, args: list[str], check: bool = True) -> subprocess.CompletedProcess[str]:
+    def _run(
+        self,
+        args: list[str],
+        check: bool = True,
+        input_text: Optional[str] = None,
+    ) -> subprocess.CompletedProcess[str]:
         try:
             result = subprocess.run(
                 ["tmux", *args],
                 capture_output=True,
                 check=check,
+                input=input_text,
                 text=True,
                 timeout=self.timeout_seconds,
             )

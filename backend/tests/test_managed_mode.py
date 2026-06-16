@@ -62,7 +62,12 @@ class RecordingTmuxClient(TmuxClient):
     def kill_session(self, name: str) -> None:
         self.killed_sessions.append(name)
 
-    def _run(self, args: list[str], check: bool = True) -> subprocess.CompletedProcess[str]:
+    def _run(
+        self,
+        args: list[str],
+        check: bool = True,
+        input_text: str | None = None,
+    ) -> subprocess.CompletedProcess[str]:
         return subprocess.CompletedProcess(["tmux", *args], 0, "", "")
 
 
