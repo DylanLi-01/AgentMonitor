@@ -67,7 +67,7 @@ class RecordingTmuxClient(TmuxClient):
 
 
 class ManagedModeTest(unittest.TestCase):
-    def test_select_managed_targets_only_includes_unarchived_actionable_codex_sessions(self) -> None:
+    def test_select_managed_targets_includes_all_unarchived_codex_sessions(self) -> None:
         targets = select_managed_targets(
             [
                 session("archived", SessionStatus.IDLE, archived=True),
@@ -85,11 +85,21 @@ class ManagedModeTest(unittest.TestCase):
 
         self.assertEqual(
             [target.name for target in targets],
-            ["error-agent", "needs-input-agent", "idle-agent", "node-codex-agent"],
+            [
+                "error-agent",
+                "needs-input-agent",
+                "idle-agent",
+                "node-codex-agent",
+                "working-agent",
+                "done-agent",
+            ],
         )
 
     def test_build_steward_prompt_contains_target_rules_and_tail(self) -> None:
-        targets = [session("idle-agent", SessionStatus.IDLE)]
+        targets = [
+            session("idle-agent", SessionStatus.IDLE),
+            session("working-agent", SessionStatus.WORKING),
+        ]
 
         prompt = build_steward_prompt(targets, lambda name, lines: f"{name} tail", NOW)
 
@@ -97,8 +107,12 @@ class ManagedModeTest(unittest.TestCase):
         self.assertIn("Do not touch archived sessions", prompt)
         self.assertIn("Default posture: observe, review existing code", prompt)
         self.assertIn("Avoid aggressive development", prompt)
+        self.assertIn("For observe_only targets, do not send tmux input", prompt)
         self.assertIn("run the smallest relevant test", prompt)
         self.assertIn("## idle-agent", prompt)
+        self.assertIn("stewardship_action: conservative_nudge_allowed", prompt)
+        self.assertIn("## working-agent", prompt)
+        self.assertIn("stewardship_action: observe_only", prompt)
         self.assertIn("idle-agent tail", prompt)
         self.assertIn("CODEX_STATUS", prompt)
 

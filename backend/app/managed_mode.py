@@ -11,7 +11,7 @@ from typing import Callable, Optional
 
 from pydantic import ValidationError
 
-from .models import ManagedModeState, ManagedModeStatus, STATUS_PRIORITY, SessionStatus, SessionSummary
+from .models import ManagedModeState, ManagedModeStatus, SessionStatus, SessionSummary
 from .tmux_client import TmuxClient, TmuxError
 
 
@@ -21,13 +21,23 @@ TARGET_TAIL_LINES = 60
 TARGET_TAIL_CHAR_LIMIT = 1600
 MONITOR_OWNED_PREFIXES = ("agentmonitor-", "codex-tmux-monitor")
 CODEX_PANE_COMMANDS = {"codex", "node"}
-TARGET_STATUSES = {
+ACTIONABLE_STATUSES = {
     SessionStatus.ERROR,
     SessionStatus.NEEDS_INPUT,
     SessionStatus.BLOCKED,
     SessionStatus.PARTIAL,
     SessionStatus.IDLE,
     SessionStatus.UNKNOWN,
+}
+MANAGED_STATUS_PRIORITY = {
+    SessionStatus.ERROR: 0,
+    SessionStatus.NEEDS_INPUT: 1,
+    SessionStatus.BLOCKED: 2,
+    SessionStatus.PARTIAL: 3,
+    SessionStatus.IDLE: 4,
+    SessionStatus.UNKNOWN: 5,
+    SessionStatus.WORKING: 6,
+    SessionStatus.DONE: 7,
 }
 
 
@@ -208,7 +218,7 @@ class ManagedModeController:
             self._store.update(
                 last_dispatch_at=now,
                 last_error=None,
-                last_summary="No eligible unarchived Codex sessions.",
+                last_summary="No unarchived Codex sessions to monitor.",
                 last_targets=[],
             )
             return
@@ -266,7 +276,7 @@ def select_managed_targets(
     ]
     targets.sort(
         key=lambda session: (
-            STATUS_PRIORITY[session.status],
+            MANAGED_STATUS_PRIORITY[session.status],
             -session.idle_seconds,
             (session.group or "").lower(),
             (session.note or session.name).lower(),
@@ -295,7 +305,8 @@ def build_steward_prompt(
             "Only suggest implementation if it is small, localized, clearly requested by the user, and testable with existing checks.",
             "Do not touch archived sessions, unlisted sessions, or AgentMonitor's own sessions.",
             "Do not edit project files directly from this steward session; direct the target agents instead.",
-            "If a target can continue without a human decision, send it at most one concise, conservative instruction with tmux send-keys.",
+            "Each target has stewardship_action. For observe_only targets, do not send tmux input; only summarize state.",
+            "For conservative_nudge_allowed targets, if they can continue without a human decision, send at most one concise, conservative instruction with tmux send-keys.",
             "Prefer instructions such as: review the recent diff, run the smallest relevant test, inspect logs, reproduce the error, verify the current result, or write a status summary.",
             "If a target needs credentials, product judgment, or missing context, leave it alone and report that.",
             "Do not repeatedly send the same instruction if the tail already shows a recent steward nudge.",
@@ -338,7 +349,13 @@ def _is_managed_target(session: SessionSummary, steward_session: str) -> bool:
         return False
     if (session.current_command or "").lower() not in CODEX_PANE_COMMANDS:
         return False
-    return session.status in TARGET_STATUSES
+    return True
+
+
+def _stewardship_action(status: SessionStatus) -> str:
+    if status in ACTIONABLE_STATUSES:
+        return "conservative_nudge_allowed"
+    return "observe_only"
 
 
 def _format_target_block(session: SessionSummary, tail_text: str) -> str:
@@ -351,6 +368,7 @@ def _format_target_block(session: SessionSummary, tail_text: str) -> str:
             f"display_name: {display_name}",
             f"group: {group}",
             f"status: {session.status.value}",
+            f"stewardship_action: {_stewardship_action(session.status)}",
             f"idle_seconds: {session.idle_seconds}",
             f"current_command: {session.current_command or 'unknown'}",
             f"attention: {session.attention_reason or 'none'}",
