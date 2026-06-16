@@ -183,6 +183,7 @@ function OverviewPage() {
 
       <ManagedModePanel
         status={managedMode}
+        sessions={sessions}
         busy={managedModeBusy}
         error={managedModeError}
         onToggle={toggleManagedMode}
@@ -280,12 +281,14 @@ function OverviewPage() {
 
 function ManagedModePanel({
   status,
+  sessions,
   busy,
   error,
   onToggle,
   onIntervalChange,
 }: {
   status: ManagedModeStatus | null;
+  sessions: SessionSummary[];
   busy: boolean;
   error: string | null;
   onToggle: (enabled: boolean) => Promise<void>;
@@ -294,6 +297,10 @@ function ManagedModePanel({
   const enabled = status?.enabled ?? false;
   const visibleError = error || status?.last_error || null;
   const reportLines = status?.report_requested_at ? status.steward_tail : [];
+  const sessionsByName = useMemo(
+    () => new Map(sessions.map((session) => [session.name, session])),
+    [sessions],
+  );
   const [intervalDraft, setIntervalDraft] = useState("3");
   const [editingInterval, setEditingInterval] = useState(false);
   const [intervalError, setIntervalError] = useState<string | null>(null);
@@ -421,9 +428,17 @@ function ManagedModePanel({
 
       {status?.last_targets.length ? (
         <div className="managed-targets" aria-label="Last managed targets">
-          {status.last_targets.map((target) => (
-            <span key={target}>{target}</span>
-          ))}
+          {status.last_targets.map((target) => {
+            const session = sessionsByName.get(target);
+            const displayName = session ? getSessionDisplayName(session) : target;
+            const hasDisplayName = Boolean(session?.note.trim());
+            return (
+              <span className="managed-target-chip" key={target} title={hasDisplayName ? target : displayName}>
+                <span className="managed-target-name">{displayName}</span>
+                {hasDisplayName ? <span className="managed-target-raw">{target}</span> : null}
+              </span>
+            );
+          })}
         </div>
       ) : null}
 

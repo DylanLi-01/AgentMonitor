@@ -5,6 +5,7 @@ import tempfile
 import unittest
 
 from app.managed_mode import (
+    CODEX_TRUST_ACCEPT_CHOICE,
     CODEX_UPDATE_SKIP_CHOICE,
     ManagedModeController,
     ManagedModeError,
@@ -18,6 +19,7 @@ from app.tmux_client import TmuxClient
 
 
 NOW = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+CODEX_READY_TAIL = "╭────╮\n│ >_ OpenAI Codex │\n│ directory: /tmp/project │\n╰────╯"
 
 
 def session(
@@ -184,7 +186,7 @@ class ManagedModeTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             store = ManagedModeStore(Path(temp_dir) / "managed.json")
             store.update(enabled=True, steward_session="steward")
-            tmux = RecordingTmuxClient([])
+            tmux = RecordingTmuxClient([], capture_outputs=[CODEX_READY_TAIL])
             controller = ManagedModeController(
                 store=store,
                 tmux_client=tmux,
@@ -193,6 +195,7 @@ class ManagedModeTest(unittest.TestCase):
                 tail_provider=lambda name, lines: "",
                 codex_binary="sh",
                 steward_startup_settle_seconds=0,
+                codex_startup_prompt_settle_seconds=0,
             )
 
             controller.dispatch_if_due(force=True)
@@ -220,7 +223,7 @@ class ManagedModeTest(unittest.TestCase):
             store.update(enabled=True, steward_session="steward")
             tmux = RecordingTmuxClient(
                 [],
-                capture_outputs=[update_prompt, "Codex ready"],
+                capture_outputs=[update_prompt, CODEX_READY_TAIL],
             )
             controller = ManagedModeController(
                 store=store,
@@ -230,12 +233,71 @@ class ManagedModeTest(unittest.TestCase):
                 tail_provider=lambda name, lines: "",
                 codex_binary="sh",
                 steward_startup_settle_seconds=0,
+                codex_startup_prompt_settle_seconds=0,
             )
 
             controller.dispatch_if_due(force=True)
 
         self.assertEqual(tmux.sent_text[0], ("steward", CODEX_UPDATE_SKIP_CHOICE, True))
         self.assertEqual(store.get().last_summary, "No unarchived Codex sessions to monitor.")
+
+    def test_steward_startup_accepts_codex_trust_prompt_before_dispatch(self) -> None:
+        trust_prompt = "\n".join(
+            [
+                "Do you trust the contents of this directory?",
+                "1. Yes, continue",
+                "2. No, quit",
+                "Press enter to continue",
+            ]
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = ManagedModeStore(Path(temp_dir) / "managed.json")
+            store.update(enabled=True, steward_session="steward")
+            tmux = RecordingTmuxClient(
+                [],
+                capture_outputs=[trust_prompt, CODEX_READY_TAIL],
+            )
+            controller = ManagedModeController(
+                store=store,
+                tmux_client=tmux,
+                project_root=Path(temp_dir),
+                summary_provider=lambda: [],
+                tail_provider=lambda name, lines: "",
+                codex_binary="sh",
+                steward_startup_settle_seconds=0,
+                codex_startup_prompt_settle_seconds=0,
+            )
+
+            controller.dispatch_if_due(force=True)
+
+        self.assertEqual(tmux.sent_text[0], ("steward", CODEX_TRUST_ACCEPT_CHOICE, True))
+        self.assertEqual(store.get().last_summary, "No unarchived Codex sessions to monitor.")
+
+    def test_steward_startup_fails_when_codex_prompt_is_not_ready(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = ManagedModeStore(Path(temp_dir) / "managed.json")
+            tmux = RecordingTmuxClient([], capture_outputs=["unrecognized startup screen"])
+            controller = ManagedModeController(
+                store=store,
+                tmux_client=tmux,
+                project_root=Path(temp_dir),
+                summary_provider=lambda: [],
+                tail_provider=lambda name, lines: "",
+                codex_binary="sh",
+                steward_startup_timeout_seconds=0,
+                steward_startup_settle_seconds=0,
+                codex_startup_prompt_timeout_seconds=0,
+                codex_startup_prompt_settle_seconds=0,
+            )
+
+            with self.assertRaises(ManagedModeError) as context:
+                controller.set_enabled(True)
+            controller.shutdown()
+
+        self.assertIn("did not reach the Codex input prompt", str(context.exception))
+        state = store.get()
+        self.assertFalse(state.enabled)
+        self.assertIn("did not reach the Codex input prompt", state.last_error or "")
 
     def test_enabling_managed_mode_fails_clearly_when_steward_exits_immediately(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -250,6 +312,7 @@ class ManagedModeTest(unittest.TestCase):
                 codex_binary="sh",
                 steward_startup_timeout_seconds=0,
                 steward_startup_settle_seconds=0,
+                codex_startup_prompt_settle_seconds=0,
             )
 
             with self.assertRaises(ManagedModeError) as context:

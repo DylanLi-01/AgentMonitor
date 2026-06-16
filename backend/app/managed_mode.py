@@ -22,10 +22,16 @@ TARGET_TAIL_CHAR_LIMIT = 1600
 STEWARD_STARTUP_TIMEOUT_SECONDS = 5.0
 STEWARD_STARTUP_POLL_SECONDS = 0.2
 STEWARD_STARTUP_SETTLE_SECONDS = 0.8
+CODEX_STARTUP_PROMPT_TIMEOUT_SECONDS = 8.0
+CODEX_STARTUP_PROMPT_POLL_SECONDS = 0.2
+CODEX_STARTUP_PROMPT_SETTLE_SECONDS = 0.4
+STEWARD_BRIEF_SUBMIT_SETTLE_SECONDS = 0.25
 CODEX_UPDATE_PROMPT_LINES = 30
 CODEX_UPDATE_PROMPT_MARKERS = ("Update available!", "Press enter to continue")
 CODEX_UPDATE_SKIP_CHOICE = "2"
-CODEX_UPDATE_SKIP_SETTLE_SECONDS = 0.5
+CODEX_TRUST_PROMPT_MARKERS = ("Do you trust the contents of this directory?", "Press enter to continue")
+CODEX_TRUST_ACCEPT_CHOICE = "1"
+CODEX_READY_MARKERS = ("OpenAI Codex", "directory:")
 MONITOR_OWNED_PREFIXES = ("agentmonitor-", "codex-tmux-monitor")
 CODEX_PANE_COMMANDS = {"codex", "node"}
 ACTIONABLE_STATUSES = {
@@ -109,6 +115,9 @@ class ManagedModeController:
         codex_binary: str = "codex",
         steward_startup_timeout_seconds: float = STEWARD_STARTUP_TIMEOUT_SECONDS,
         steward_startup_settle_seconds: float = STEWARD_STARTUP_SETTLE_SECONDS,
+        codex_startup_prompt_timeout_seconds: float = CODEX_STARTUP_PROMPT_TIMEOUT_SECONDS,
+        codex_startup_prompt_settle_seconds: float = CODEX_STARTUP_PROMPT_SETTLE_SECONDS,
+        steward_brief_submit_settle_seconds: float = STEWARD_BRIEF_SUBMIT_SETTLE_SECONDS,
     ) -> None:
         self._store = store
         self._tmux_client = tmux_client
@@ -118,6 +127,9 @@ class ManagedModeController:
         self._codex_binary = codex_binary
         self._steward_startup_timeout_seconds = steward_startup_timeout_seconds
         self._steward_startup_settle_seconds = steward_startup_settle_seconds
+        self._codex_startup_prompt_timeout_seconds = codex_startup_prompt_timeout_seconds
+        self._codex_startup_prompt_settle_seconds = codex_startup_prompt_settle_seconds
+        self._steward_brief_submit_settle_seconds = steward_brief_submit_settle_seconds
         self._worker_lock = threading.Lock()
         self._dispatch_lock = threading.Lock()
         self._stop_event = threading.Event()
@@ -235,14 +247,7 @@ class ManagedModeController:
             return
 
         prompt = build_steward_prompt(targets, self._tail_provider, now)
-        try:
-            self._tmux_client.send_text(state.steward_session, prompt, enter=True)
-        except TmuxError as exc:
-            if not self._session_exists(state.steward_session):
-                raise ManagedModeError(
-                    "Steward session exited before it could receive the stewardship brief."
-                ) from exc
-            raise
+        self._send_steward_prompt(state.steward_session, prompt)
         self._store.update(
             last_dispatch_at=now,
             last_error=None,
@@ -250,23 +255,35 @@ class ManagedModeController:
             last_targets=[target.name for target in targets],
         )
 
-    def _ensure_steward_session(self, name: str) -> None:
-        if self._session_exists(name):
-            return
+    def _send_steward_prompt(self, name: str, prompt: str) -> None:
+        try:
+            self._tmux_client.send_text(name, prompt, enter=False)
+            if self._steward_brief_submit_settle_seconds > 0:
+                time.sleep(self._steward_brief_submit_settle_seconds)
+            self._tmux_client.send_key(name, "Enter")
+        except TmuxError as exc:
+            if not self._session_exists(name):
+                raise ManagedModeError(
+                    "Steward session exited before it could receive the stewardship brief."
+                ) from exc
+            raise
 
-        codex_path = self._ensure_codex_available()
-        command = " ".join(
-            [
-                shlex.quote(codex_path),
-                "--dangerously-bypass-approvals-and-sandbox",
-                "--no-alt-screen",
-                "--cd",
-                shlex.quote(str(self._project_root)),
-            ]
-        )
-        self._tmux_client.new_session(name, command, start_directory=str(self._project_root))
-        self._wait_for_steward_session(name)
-        self._skip_codex_update_prompt_if_present(name)
+    def _ensure_steward_session(self, name: str) -> None:
+        if not self._session_exists(name):
+            codex_path = self._ensure_codex_available()
+            command = " ".join(
+                [
+                    shlex.quote(codex_path),
+                    "--dangerously-bypass-approvals-and-sandbox",
+                    "--no-alt-screen",
+                    "--cd",
+                    shlex.quote(str(self._project_root)),
+                ]
+            )
+            self._tmux_client.new_session(name, command, start_directory=str(self._project_root))
+            self._wait_for_steward_session(name)
+
+        self._prepare_steward_session_for_input(name)
 
     def _wait_for_steward_session(self, name: str) -> None:
         deadline = time.monotonic() + self._steward_startup_timeout_seconds
@@ -288,29 +305,47 @@ class ManagedModeController:
             remaining = max(0.0, deadline - time.monotonic())
             time.sleep(min(STEWARD_STARTUP_POLL_SECONDS, remaining))
 
-    def _skip_codex_update_prompt_if_present(self, name: str) -> None:
-        tail = self._tmux_client.capture_session(name, lines=CODEX_UPDATE_PROMPT_LINES)
-        if not _is_codex_update_prompt(tail):
-            return
+    def _prepare_steward_session_for_input(self, name: str) -> None:
+        deadline = time.monotonic() + self._codex_startup_prompt_timeout_seconds
+        last_tail = ""
 
+        while True:
+            if not self._session_exists(name):
+                raise ManagedModeError(
+                    "Steward session exited before Codex reached the input prompt."
+                )
+
+            last_tail = self._tmux_client.capture_session(name, lines=CODEX_UPDATE_PROMPT_LINES)
+            if _is_codex_ready(last_tail):
+                return
+
+            if _is_codex_trust_prompt(last_tail):
+                self._answer_steward_startup_prompt(name, CODEX_TRUST_ACCEPT_CHOICE, "trust")
+                continue
+
+            if _is_codex_update_prompt(last_tail):
+                self._answer_steward_startup_prompt(name, CODEX_UPDATE_SKIP_CHOICE, "update")
+                continue
+
+            if time.monotonic() >= deadline:
+                raise ManagedModeError(
+                    "Steward session did not reach the Codex input prompt; last startup tail: "
+                    f"{_truncate_text(last_tail, 500)}"
+                )
+
+            remaining = max(0.0, deadline - time.monotonic())
+            time.sleep(min(CODEX_STARTUP_PROMPT_POLL_SECONDS, remaining))
+
+    def _answer_steward_startup_prompt(self, name: str, choice: str, prompt_name: str) -> None:
         try:
-            self._tmux_client.send_text(name, CODEX_UPDATE_SKIP_CHOICE, enter=True)
+            self._tmux_client.send_text(name, choice, enter=True)
         except TmuxError as exc:
             raise ManagedModeError(
-                "Steward session did not accept the Codex update prompt response."
+                f"Steward session did not accept the Codex {prompt_name} prompt response."
             ) from exc
 
-        time.sleep(CODEX_UPDATE_SKIP_SETTLE_SECONDS)
-        if not self._session_exists(name):
-            raise ManagedModeError(
-                "Steward session exited after skipping the Codex update prompt."
-            )
-
-        tail_after_skip = self._tmux_client.capture_session(name, lines=CODEX_UPDATE_PROMPT_LINES)
-        if _is_codex_update_prompt(tail_after_skip):
-            raise ManagedModeError(
-                "Codex update prompt blocked steward startup; update Codex CLI or select Skip manually."
-            )
+        if self._codex_startup_prompt_settle_seconds > 0:
+            time.sleep(self._codex_startup_prompt_settle_seconds)
 
     def _ensure_codex_available(self) -> str:
         codex_path = shutil.which(self._codex_binary)
@@ -450,6 +485,14 @@ def _truncate_text(value: str, limit: int) -> str:
 
 def _is_codex_update_prompt(text: str) -> bool:
     return all(marker in text for marker in CODEX_UPDATE_PROMPT_MARKERS)
+
+
+def _is_codex_trust_prompt(text: str) -> bool:
+    return all(marker in text for marker in CODEX_TRUST_PROMPT_MARKERS)
+
+
+def _is_codex_ready(text: str) -> bool:
+    return all(marker in text for marker in CODEX_READY_MARKERS)
 
 
 def _utc_now() -> datetime:
