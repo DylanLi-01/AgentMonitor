@@ -361,8 +361,6 @@ function SessionDetailPage({ name }: { name: string }) {
             <MetaItem label="Attention" value={session.attention_reason ?? "None"} />
           </section>
 
-          <SessionComposer session={session} />
-
           <section className="tail-panel" aria-label="Live tail">
             <div className="tail-head">
               <h2>Live Tail</h2>
@@ -384,6 +382,8 @@ function SessionDetailPage({ name }: { name: string }) {
               )}
             </div>
           </section>
+
+          <SessionComposer session={session} />
         </>
       ) : null}
     </main>
@@ -403,7 +403,7 @@ function SessionComposer({ session }: { session: SessionDetail }) {
   }, [session.name]);
 
   async function sendText() {
-    if (!draft.trim()) return;
+    if (sending || !draft.trim()) return;
     setSending(true);
     setSendError(null);
     try {
@@ -449,7 +449,7 @@ function SessionComposer({ session }: { session: SessionDetail }) {
           value={draft}
           onChange={(event) => setDraft(event.target.value)}
           onKeyDown={(event) => {
-            if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+            if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
               event.preventDefault();
               void sendText();
             }
