@@ -87,6 +87,15 @@ class TmuxClient:
 
         return datetime.fromtimestamp(max(timestamps), tz=timezone.utc)
 
+    def send_text(self, name: str, text: str, enter: bool = True) -> None:
+        if text:
+            self._run(["send-keys", "-t", name, "-l", text])
+        if enter:
+            self.send_key(name, "Enter")
+
+    def send_key(self, name: str, key: str) -> None:
+        self._run(["send-keys", "-t", name, key])
+
     def _run(self, args: list[str], check: bool = True) -> subprocess.CompletedProcess[str]:
         try:
             result = subprocess.run(

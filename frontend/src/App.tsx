@@ -5,19 +5,22 @@ import {
   ArchiveRestore,
   ChevronDown,
   ChevronRight,
+  CornerDownLeft,
   Eye,
   EyeOff,
   Folder,
   Pencil,
   Save,
+  Send,
   X,
 } from "lucide-react";
-import { fetchHealth, fetchSession, fetchSessions, patchSessionMetadata } from "./api";
+import { fetchHealth, fetchSession, fetchSessions, patchSessionMetadata, sendSessionInput } from "./api";
 import type {
   SessionMetadata,
   SessionMetadataPatch,
   HealthResponse,
   SessionDetail,
+  SessionInputKey,
   SessionStatus,
   SessionSummary,
 } from "./types";
@@ -358,6 +361,8 @@ function SessionDetailPage({ name }: { name: string }) {
             <MetaItem label="Attention" value={session.attention_reason ?? "None"} />
           </section>
 
+          <SessionComposer session={session} />
+
           <section className="tail-panel" aria-label="Live tail">
             <div className="tail-head">
               <h2>Live Tail</h2>
@@ -382,6 +387,91 @@ function SessionDetailPage({ name }: { name: string }) {
         </>
       ) : null}
     </main>
+  );
+}
+
+function SessionComposer({ session }: { session: SessionDetail }) {
+  const [draft, setDraft] = useState("");
+  const [sending, setSending] = useState(false);
+  const [sendError, setSendError] = useState<string | null>(null);
+  const [sentAt, setSentAt] = useState<Date | null>(null);
+
+  useEffect(() => {
+    setDraft("");
+    setSendError(null);
+    setSentAt(null);
+  }, [session.name]);
+
+  async function sendText() {
+    if (!draft.trim()) return;
+    setSending(true);
+    setSendError(null);
+    try {
+      await sendSessionInput(session.name, { text: draft, enter: true });
+      setDraft("");
+      setSentAt(new Date());
+    } catch (err) {
+      setSendError(err instanceof Error ? err.message : "Unable to send input");
+    } finally {
+      setSending(false);
+    }
+  }
+
+  async function sendKey(key: SessionInputKey) {
+    setSending(true);
+    setSendError(null);
+    try {
+      await sendSessionInput(session.name, { key });
+      setSentAt(new Date());
+    } catch (err) {
+      setSendError(err instanceof Error ? err.message : "Unable to send key");
+    } finally {
+      setSending(false);
+    }
+  }
+
+  return (
+    <section className="interaction-panel" aria-label="Session input">
+      <div className="interaction-head">
+        <h2>Interact</h2>
+        {sentAt ? <span>Sent {formatTime(sentAt.toISOString())}</span> : null}
+      </div>
+      <form
+        className="interaction-form"
+        onSubmit={(event) => {
+          event.preventDefault();
+          void sendText();
+        }}
+      >
+        <textarea
+          aria-label="Input for session"
+          placeholder="Message or command"
+          value={draft}
+          onChange={(event) => setDraft(event.target.value)}
+          onKeyDown={(event) => {
+            if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+              event.preventDefault();
+              void sendText();
+            }
+          }}
+        />
+        <div className="interaction-actions">
+          <ActionButton label="Send input" type="submit" disabled={sending || !draft.trim()}>
+            <Send size={16} />
+            <span>Send</span>
+          </ActionButton>
+          <ActionButton label="Send Enter" disabled={sending} onClick={() => void sendKey("Enter")}>
+            <CornerDownLeft size={16} />
+            <span>Enter</span>
+          </ActionButton>
+          <ActionButton label="Send Ctrl-C" disabled={sending} onClick={() => void sendKey("C-c")}>
+            <X size={16} />
+            <span>Ctrl+C</span>
+          </ActionButton>
+        </div>
+        {sendError ? <div className="interaction-error">{sendError}</div> : null}
+      </form>
+    </section>
   );
 }
 

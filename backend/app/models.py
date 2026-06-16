@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
+from typing import Literal
 from typing import Optional
 
 from pydantic import BaseModel, Field
@@ -81,3 +82,13 @@ class SessionMetadataPatch(BaseModel):
     collapsed: Optional[bool] = None
     group: Optional[str] = Field(default=None, max_length=120)
     note: Optional[str] = Field(default=None, max_length=1000)
+
+
+class SessionInputRequest(BaseModel):
+    text: str = Field(default="", max_length=20000)
+    enter: bool = False
+    key: Optional[Literal["Enter", "Tab", "Escape", "C-c"]] = None
+
+
+class SessionInputResponse(BaseModel):
+    ok: bool = True

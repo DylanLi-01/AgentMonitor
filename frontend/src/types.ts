@@ -49,3 +49,15 @@ export interface SessionMetadataPatch {
   group?: string;
   note?: string;
 }
+
+export type SessionInputKey = "Enter" | "Tab" | "Escape" | "C-c";
+
+export interface SessionInputRequest {
+  text?: string;
+  enter?: boolean;
+  key?: SessionInputKey;
+}
+
+export interface SessionInputResponse {
+  ok: boolean;
+}

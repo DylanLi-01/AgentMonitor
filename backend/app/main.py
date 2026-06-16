@@ -13,6 +13,8 @@ from .metadata_store import MetadataStore
 from .models import (
     STATUS_PRIORITY,
     HealthResponse,
+    SessionInputRequest,
+    SessionInputResponse,
     SessionMetadata,
     SessionMetadataPatch,
     SessionDetail,
@@ -32,7 +34,7 @@ app.add_middleware(
         "http://127.0.0.1:5173",
     ],
     allow_credentials=False,
-    allow_methods=["GET", "PATCH"],
+    allow_methods=["GET", "PATCH", "POST"],
     allow_headers=["*"],
 )
 
@@ -96,6 +98,29 @@ def update_session_metadata(name: str, patch: SessionMetadataPatch) -> SessionMe
         return metadata_store.update(name, patch)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/sessions/{name}/input", response_model=SessionInputResponse)
+def send_session_input(name: str, payload: SessionInputRequest) -> SessionInputResponse:
+    names = set(_safe_list_sessions())
+    if name not in names:
+        raise HTTPException(status_code=404, detail=f"Session '{name}' not found")
+
+    text = payload.text
+    if not text and not payload.key and not payload.enter:
+        raise HTTPException(status_code=400, detail="Input payload is empty")
+
+    try:
+        if text:
+            tmux_client.send_text(name, text, enter=False)
+        if payload.enter:
+            tmux_client.send_key(name, "Enter")
+        if payload.key:
+            tmux_client.send_key(name, payload.key)
+    except TmuxError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    return SessionInputResponse()
 
 
 @app.get("/", include_in_schema=False)

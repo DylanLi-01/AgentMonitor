@@ -1,0 +1,92 @@
+import unittest
+
+from fastapi.testclient import TestClient
+
+from app import main
+from app.tmux_client import TmuxError
+
+
+class FakeTmuxClient:
+    def __init__(self, names: list[str]) -> None:
+        self.names = names
+        self.calls: list[tuple[str, str, str, bool | None]] = []
+
+    def list_sessions(self) -> list[str]:
+        return self.names
+
+    def send_text(self, name: str, text: str, enter: bool = True) -> None:
+        self.calls.append(("text", name, text, enter))
+
+    def send_key(self, name: str, key: str) -> None:
+        self.calls.append(("key", name, key, None))
+
+
+class ExplodingTmuxClient(FakeTmuxClient):
+    def send_key(self, name: str, key: str) -> None:
+        raise TmuxError("tmux send failed")
+
+
+class SessionInputApiTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.original_tmux_client = main.tmux_client
+        self.client = TestClient(main.app)
+
+    def tearDown(self) -> None:
+        main.tmux_client = self.original_tmux_client
+
+    def test_send_session_input_posts_literal_text_and_enter(self) -> None:
+        fake = FakeTmuxClient(["codex"])
+        main.tmux_client = fake
+
+        response = self.client.post(
+            "/api/sessions/codex/input",
+            json={"text": "hello; rm -rf nope", "enter": True},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"ok": True})
+        self.assertEqual(
+            fake.calls,
+            [
+                ("text", "codex", "hello; rm -rf nope", False),
+                ("key", "codex", "Enter", None),
+            ],
+        )
+
+    def test_send_session_input_rejects_empty_payload(self) -> None:
+        fake = FakeTmuxClient(["codex"])
+        main.tmux_client = fake
+
+        response = self.client.post("/api/sessions/codex/input", json={})
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json(), {"detail": "Input payload is empty"})
+        self.assertEqual(fake.calls, [])
+
+    def test_send_session_input_requires_existing_session(self) -> None:
+        fake = FakeTmuxClient(["other"])
+        main.tmux_client = fake
+
+        response = self.client.post(
+            "/api/sessions/codex/input",
+            json={"text": "hello", "enter": True},
+        )
+
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.json(), {"detail": "Session 'codex' not found"})
+        self.assertEqual(fake.calls, [])
+
+    def test_send_session_input_surfaces_tmux_errors(self) -> None:
+        main.tmux_client = ExplodingTmuxClient(["codex"])
+
+        response = self.client.post(
+            "/api/sessions/codex/input",
+            json={"key": "Enter"},
+        )
+
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.json(), {"detail": "tmux send failed"})
+
+
+if __name__ == "__main__":
+    unittest.main()

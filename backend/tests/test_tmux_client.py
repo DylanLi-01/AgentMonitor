@@ -17,9 +17,38 @@ class NoServerTmuxClient(TmuxClient):
         )
 
 
+class RecordingTmuxClient(TmuxClient):
+    def __init__(self) -> None:
+        object.__setattr__(self, "calls", [])
+
+    def _run(self, args: list[str], check: bool = True) -> subprocess.CompletedProcess[str]:
+        self.calls.append(args)
+        return subprocess.CompletedProcess(["tmux", *args], 0, "", "")
+
+
 class TmuxClientTest(unittest.TestCase):
     def test_missing_tmux_server_is_empty_session_list(self) -> None:
         self.assertEqual(NoServerTmuxClient().list_sessions(), [])
+
+    def test_send_text_uses_literal_mode_and_enter(self) -> None:
+        client = RecordingTmuxClient()
+
+        client.send_text("codex", "hello; rm -rf nope", enter=True)
+
+        self.assertEqual(
+            client.calls,
+            [
+                ["send-keys", "-t", "codex", "-l", "hello; rm -rf nope"],
+                ["send-keys", "-t", "codex", "Enter"],
+            ],
+        )
+
+    def test_send_key_sends_named_key(self) -> None:
+        client = RecordingTmuxClient()
+
+        client.send_key("codex", "C-c")
+
+        self.assertEqual(client.calls, [["send-keys", "-t", "codex", "C-c"]])
 
 
 if __name__ == "__main__":
