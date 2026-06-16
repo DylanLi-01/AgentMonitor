@@ -144,8 +144,9 @@ session is left running so the report remains visible in the dashboard.
 
 ## Codex Status Footer
 
-The analyzer can read a final machine-parseable status footer from an agent
-reply. This is the most reliable way to avoid noisy keyword heuristics:
+The analyzer reads final machine-parseable status from an agent reply. It does
+not infer `error`, `done`, `needs_input`, or similar states from arbitrary
+output keywords.
 
 ```yaml
 CODEX_STATUS:
@@ -153,6 +154,19 @@ CODEX_STATUS:
   summary: "Short outcome summary."
   needs_user: false
   next_action: "none"
+```
+
+JSON is also supported:
+
+```json
+{
+  "CODEX_STATUS": {
+    "status": "done",
+    "summary": "Short outcome summary.",
+    "needs_user": false,
+    "next_action": "none"
+  }
+}
 ```
 
 Supported status values:
@@ -164,8 +178,9 @@ Supported status values:
 - `working`
 - `partial`
 
-If no footer is present, the backend falls back to tmux activity and recent
-tail-output heuristics.
+If no structured status is present, the backend only uses tmux activity state:
+changed output is `working`, no output change after the idle threshold is
+`idle`, and otherwise the status is `unknown`.
 
 ## API
 
