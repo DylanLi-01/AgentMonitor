@@ -5,7 +5,9 @@ import tempfile
 import unittest
 
 from app.managed_mode import (
+    CODEX_UPDATE_SKIP_CHOICE,
     ManagedModeController,
+    ManagedModeError,
     ManagedModeStore,
     build_steward_prompt,
     build_steward_report_prompt,
@@ -42,10 +44,19 @@ def session(
 
 
 class RecordingTmuxClient(TmuxClient):
-    def __init__(self, names: list[str]) -> None:
+    def __init__(
+        self,
+        names: list[str],
+        *,
+        add_session_on_new: bool = True,
+        capture_outputs: list[str] | None = None,
+    ) -> None:
         object.__setattr__(self, "names", names)
         object.__setattr__(self, "sent_text", [])
         object.__setattr__(self, "killed_sessions", [])
+        object.__setattr__(self, "new_sessions", [])
+        object.__setattr__(self, "add_session_on_new", add_session_on_new)
+        object.__setattr__(self, "capture_outputs", capture_outputs or [])
 
     def tmux_available(self) -> bool:
         return True
@@ -54,10 +65,17 @@ class RecordingTmuxClient(TmuxClient):
         return self.names
 
     def capture_session(self, name: str, lines: int = 100) -> str:
+        if self.capture_outputs:
+            return self.capture_outputs.pop(0)
         return "托管报告草稿"
 
     def send_text(self, name: str, text: str, enter: bool = True) -> None:
         self.sent_text.append((name, text, enter))
+
+    def new_session(self, name: str, command: str, start_directory: str | None = None) -> None:
+        self.new_sessions.append((name, command, start_directory))
+        if self.add_session_on_new and name not in self.names:
+            self.names.append(name)
 
     def kill_session(self, name: str) -> None:
         self.killed_sessions.append(name)
@@ -161,6 +179,87 @@ class ManagedModeTest(unittest.TestCase):
         self.assertEqual(tmux.sent_text[0][0], "steward")
         self.assertIn("Managed Mode Final Report", tmux.sent_text[0][1])
         self.assertIn("idle-agent", tmux.sent_text[0][1])
+
+    def test_steward_start_command_uses_compatible_codex_flags(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = ManagedModeStore(Path(temp_dir) / "managed.json")
+            store.update(enabled=True, steward_session="steward")
+            tmux = RecordingTmuxClient([])
+            controller = ManagedModeController(
+                store=store,
+                tmux_client=tmux,
+                project_root=Path(temp_dir),
+                summary_provider=lambda: [],
+                tail_provider=lambda name, lines: "",
+                codex_binary="sh",
+                steward_startup_settle_seconds=0,
+            )
+
+            controller.dispatch_if_due(force=True)
+
+        self.assertEqual(len(tmux.new_sessions), 1)
+        _, command, start_directory = tmux.new_sessions[0]
+        self.assertEqual(start_directory, temp_dir)
+        self.assertIn("--dangerously-bypass-approvals-and-sandbox", command)
+        self.assertIn("--no-alt-screen", command)
+        self.assertIn("--cd", command)
+        self.assertNotIn("--ask-for-approval", command)
+        self.assertNotIn("never", command)
+
+    def test_steward_startup_skips_codex_update_prompt(self) -> None:
+        update_prompt = "\n".join(
+            [
+                "Update available! 0.139.0 -> 0.140.0",
+                "1. Update now",
+                "2. Skip",
+                "Press enter to continue",
+            ]
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = ManagedModeStore(Path(temp_dir) / "managed.json")
+            store.update(enabled=True, steward_session="steward")
+            tmux = RecordingTmuxClient(
+                [],
+                capture_outputs=[update_prompt, "Codex ready"],
+            )
+            controller = ManagedModeController(
+                store=store,
+                tmux_client=tmux,
+                project_root=Path(temp_dir),
+                summary_provider=lambda: [],
+                tail_provider=lambda name, lines: "",
+                codex_binary="sh",
+                steward_startup_settle_seconds=0,
+            )
+
+            controller.dispatch_if_due(force=True)
+
+        self.assertEqual(tmux.sent_text[0], ("steward", CODEX_UPDATE_SKIP_CHOICE, True))
+        self.assertEqual(store.get().last_summary, "No unarchived Codex sessions to monitor.")
+
+    def test_enabling_managed_mode_fails_clearly_when_steward_exits_immediately(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = ManagedModeStore(Path(temp_dir) / "managed.json")
+            tmux = RecordingTmuxClient([], add_session_on_new=False)
+            controller = ManagedModeController(
+                store=store,
+                tmux_client=tmux,
+                project_root=Path(temp_dir),
+                summary_provider=lambda: [],
+                tail_provider=lambda name, lines: "",
+                codex_binary="sh",
+                steward_startup_timeout_seconds=0,
+                steward_startup_settle_seconds=0,
+            )
+
+            with self.assertRaises(ManagedModeError) as context:
+                controller.set_enabled(True)
+            controller.shutdown()
+
+        self.assertIn("Steward session did not start", str(context.exception))
+        state = store.get()
+        self.assertFalse(state.enabled)
+        self.assertIn("Steward session did not start", state.last_error or "")
 
 
 if __name__ == "__main__":

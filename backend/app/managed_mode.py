@@ -19,6 +19,13 @@ DEFAULT_STEWARD_SESSION = "agentmonitor-steward"
 MANAGED_TARGET_LIMIT = 24
 TARGET_TAIL_LINES = 60
 TARGET_TAIL_CHAR_LIMIT = 1600
+STEWARD_STARTUP_TIMEOUT_SECONDS = 5.0
+STEWARD_STARTUP_POLL_SECONDS = 0.2
+STEWARD_STARTUP_SETTLE_SECONDS = 0.8
+CODEX_UPDATE_PROMPT_LINES = 30
+CODEX_UPDATE_PROMPT_MARKERS = ("Update available!", "Press enter to continue")
+CODEX_UPDATE_SKIP_CHOICE = "2"
+CODEX_UPDATE_SKIP_SETTLE_SECONDS = 0.5
 MONITOR_OWNED_PREFIXES = ("agentmonitor-", "codex-tmux-monitor")
 CODEX_PANE_COMMANDS = {"codex", "node"}
 ACTIONABLE_STATUSES = {
@@ -100,6 +107,8 @@ class ManagedModeController:
         summary_provider: Callable[[], list[SessionSummary]],
         tail_provider: Callable[[str, int], str],
         codex_binary: str = "codex",
+        steward_startup_timeout_seconds: float = STEWARD_STARTUP_TIMEOUT_SECONDS,
+        steward_startup_settle_seconds: float = STEWARD_STARTUP_SETTLE_SECONDS,
     ) -> None:
         self._store = store
         self._tmux_client = tmux_client
@@ -107,6 +116,8 @@ class ManagedModeController:
         self._summary_provider = summary_provider
         self._tail_provider = tail_provider
         self._codex_binary = codex_binary
+        self._steward_startup_timeout_seconds = steward_startup_timeout_seconds
+        self._steward_startup_settle_seconds = steward_startup_settle_seconds
         self._worker_lock = threading.Lock()
         self._dispatch_lock = threading.Lock()
         self._stop_event = threading.Event()
@@ -224,7 +235,14 @@ class ManagedModeController:
             return
 
         prompt = build_steward_prompt(targets, self._tail_provider, now)
-        self._tmux_client.send_text(state.steward_session, prompt, enter=True)
+        try:
+            self._tmux_client.send_text(state.steward_session, prompt, enter=True)
+        except TmuxError as exc:
+            if not self._session_exists(state.steward_session):
+                raise ManagedModeError(
+                    "Steward session exited before it could receive the stewardship brief."
+                ) from exc
+            raise
         self._store.update(
             last_dispatch_at=now,
             last_error=None,
@@ -241,15 +259,58 @@ class ManagedModeController:
             [
                 shlex.quote(codex_path),
                 "--dangerously-bypass-approvals-and-sandbox",
-                "--ask-for-approval",
-                "never",
                 "--no-alt-screen",
                 "--cd",
                 shlex.quote(str(self._project_root)),
             ]
         )
         self._tmux_client.new_session(name, command, start_directory=str(self._project_root))
-        time.sleep(1)
+        self._wait_for_steward_session(name)
+        self._skip_codex_update_prompt_if_present(name)
+
+    def _wait_for_steward_session(self, name: str) -> None:
+        deadline = time.monotonic() + self._steward_startup_timeout_seconds
+        while True:
+            if self._session_exists(name):
+                if self._steward_startup_settle_seconds > 0:
+                    time.sleep(self._steward_startup_settle_seconds)
+                if self._session_exists(name):
+                    return
+                raise ManagedModeError(
+                    "Steward session exited immediately after startup; check Codex CLI startup options."
+                )
+
+            if time.monotonic() >= deadline:
+                raise ManagedModeError(
+                    "Steward session did not start; check Codex CLI startup options."
+                )
+
+            remaining = max(0.0, deadline - time.monotonic())
+            time.sleep(min(STEWARD_STARTUP_POLL_SECONDS, remaining))
+
+    def _skip_codex_update_prompt_if_present(self, name: str) -> None:
+        tail = self._tmux_client.capture_session(name, lines=CODEX_UPDATE_PROMPT_LINES)
+        if not _is_codex_update_prompt(tail):
+            return
+
+        try:
+            self._tmux_client.send_text(name, CODEX_UPDATE_SKIP_CHOICE, enter=True)
+        except TmuxError as exc:
+            raise ManagedModeError(
+                "Steward session did not accept the Codex update prompt response."
+            ) from exc
+
+        time.sleep(CODEX_UPDATE_SKIP_SETTLE_SECONDS)
+        if not self._session_exists(name):
+            raise ManagedModeError(
+                "Steward session exited after skipping the Codex update prompt."
+            )
+
+        tail_after_skip = self._tmux_client.capture_session(name, lines=CODEX_UPDATE_PROMPT_LINES)
+        if _is_codex_update_prompt(tail_after_skip):
+            raise ManagedModeError(
+                "Codex update prompt blocked steward startup; update Codex CLI or select Skip manually."
+            )
 
     def _ensure_codex_available(self) -> str:
         codex_path = shutil.which(self._codex_binary)
@@ -385,6 +446,10 @@ def _truncate_text(value: str, limit: int) -> str:
     if len(value) <= limit:
         return value
     return f"{value[: limit - 40]}\n...[truncated {len(value) - limit + 40} chars]"
+
+
+def _is_codex_update_prompt(text: str) -> bool:
+    return all(marker in text for marker in CODEX_UPDATE_PROMPT_MARKERS)
 
 
 def _utc_now() -> datetime:
