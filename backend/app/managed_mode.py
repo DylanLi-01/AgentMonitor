@@ -22,6 +22,8 @@ TARGET_TAIL_CHAR_LIMIT = 1600
 STEWARD_STARTUP_TIMEOUT_SECONDS = 5.0
 STEWARD_STARTUP_POLL_SECONDS = 0.2
 STEWARD_STARTUP_SETTLE_SECONDS = 0.8
+STEWARD_RESET_TIMEOUT_SECONDS = 3.0
+STEWARD_RESET_POLL_SECONDS = 0.1
 CODEX_STARTUP_PROMPT_TIMEOUT_SECONDS = 8.0
 CODEX_STARTUP_PROMPT_POLL_SECONDS = 0.2
 CODEX_STARTUP_PROMPT_SETTLE_SECONDS = 0.4
@@ -41,6 +43,7 @@ ACTIONABLE_STATUSES = {
     SessionStatus.PARTIAL,
     SessionStatus.IDLE,
     SessionStatus.UNKNOWN,
+    SessionStatus.DONE,
 }
 MANAGED_STATUS_PRIORITY = {
     SessionStatus.ERROR: 0,
@@ -151,9 +154,12 @@ class ManagedModeController:
 
     def set_enabled(self, enabled: bool) -> ManagedModeStatus:
         if enabled:
+            state = self._store.get()
             self._ensure_tmux_available()
             self._ensure_codex_available()
-            self._store.update(enabled=True, last_error=None)
+            if not state.enabled:
+                self._reset_steward_session_for_new_run(state.steward_session)
+            self._store.update(enabled=True, last_error=None, report_requested_at=None)
             self._ensure_worker()
             try:
                 self.dispatch_if_due(force=True)
@@ -171,10 +177,9 @@ class ManagedModeController:
                 last_error=None,
             )
             if self._session_exists(state.steward_session):
-                self._tmux_client.send_text(
+                self._send_steward_prompt(
                     state.steward_session,
                     build_steward_report_prompt(state, now),
-                    enter=True,
                 )
                 self._store.update(
                     report_requested_at=now,
@@ -268,7 +273,22 @@ class ManagedModeController:
                 ) from exc
             raise
 
+    def _reset_steward_session_for_new_run(self, name: str) -> None:
+        if not self._session_exists(name):
+            return
+
+        self._tmux_client.kill_session(name)
+        deadline = time.monotonic() + STEWARD_RESET_TIMEOUT_SECONDS
+        while self._session_exists(name):
+            if time.monotonic() >= deadline:
+                raise ManagedModeError(
+                    f"Steward session did not stop before restart: {name}"
+                )
+            remaining = max(0.0, deadline - time.monotonic())
+            time.sleep(min(STEWARD_RESET_POLL_SECONDS, remaining))
+
     def _ensure_steward_session(self, name: str) -> None:
+        created = False
         if not self._session_exists(name):
             codex_path = self._ensure_codex_available()
             command = " ".join(
@@ -282,8 +302,10 @@ class ManagedModeController:
             )
             self._tmux_client.new_session(name, command, start_directory=str(self._project_root))
             self._wait_for_steward_session(name)
+            created = True
 
-        self._prepare_steward_session_for_input(name)
+        if created:
+            self._prepare_steward_session_for_input(name)
 
     def _wait_for_steward_session(self, name: str) -> None:
         deadline = time.monotonic() + self._steward_startup_timeout_seconds

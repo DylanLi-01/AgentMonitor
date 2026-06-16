@@ -55,6 +55,7 @@ class RecordingTmuxClient(TmuxClient):
     ) -> None:
         object.__setattr__(self, "names", names)
         object.__setattr__(self, "sent_text", [])
+        object.__setattr__(self, "sent_keys", [])
         object.__setattr__(self, "killed_sessions", [])
         object.__setattr__(self, "new_sessions", [])
         object.__setattr__(self, "add_session_on_new", add_session_on_new)
@@ -74,6 +75,9 @@ class RecordingTmuxClient(TmuxClient):
     def send_text(self, name: str, text: str, enter: bool = True) -> None:
         self.sent_text.append((name, text, enter))
 
+    def send_key(self, name: str, key: str) -> None:
+        self.sent_keys.append((name, key))
+
     def new_session(self, name: str, command: str, start_directory: str | None = None) -> None:
         self.new_sessions.append((name, command, start_directory))
         if self.add_session_on_new and name not in self.names:
@@ -81,6 +85,8 @@ class RecordingTmuxClient(TmuxClient):
 
     def kill_session(self, name: str) -> None:
         self.killed_sessions.append(name)
+        if name in self.names:
+            self.names.remove(name)
 
     def _run(
         self,
@@ -124,6 +130,7 @@ class ManagedModeTest(unittest.TestCase):
         targets = [
             session("idle-agent", SessionStatus.IDLE),
             session("working-agent", SessionStatus.WORKING),
+            session("done-agent", SessionStatus.DONE),
         ]
 
         prompt = build_steward_prompt(targets, lambda name, lines: f"{name} tail", NOW)
@@ -138,6 +145,18 @@ class ManagedModeTest(unittest.TestCase):
         self.assertIn("stewardship_action: conservative_nudge_allowed", prompt)
         self.assertIn("## working-agent", prompt)
         self.assertIn("stewardship_action: observe_only", prompt)
+        self.assertIn(
+            "\n".join(
+                [
+                    "## done-agent",
+                    "display_name: done-agent",
+                    "group: Project",
+                    "status: done",
+                    "stewardship_action: conservative_nudge_allowed",
+                ]
+            ),
+            prompt,
+        )
         self.assertIn("idle-agent tail", prompt)
         self.assertIn("CODEX_STATUS", prompt)
 
@@ -179,8 +198,35 @@ class ManagedModeTest(unittest.TestCase):
         self.assertIsNotNone(status.report_requested_at)
         self.assertEqual(tmux.killed_sessions, [])
         self.assertEqual(tmux.sent_text[0][0], "steward")
+        self.assertFalse(tmux.sent_text[0][2])
+        self.assertEqual(tmux.sent_keys, [("steward", "Enter")])
         self.assertIn("Managed Mode Final Report", tmux.sent_text[0][1])
         self.assertIn("idle-agent", tmux.sent_text[0][1])
+
+    def test_enabling_managed_mode_restarts_stale_steward_session(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = ManagedModeStore(Path(temp_dir) / "managed.json")
+            store.update(enabled=False, steward_session="steward", report_requested_at=NOW)
+            tmux = RecordingTmuxClient(["steward"], capture_outputs=[CODEX_READY_TAIL])
+            controller = ManagedModeController(
+                store=store,
+                tmux_client=tmux,
+                project_root=Path(temp_dir),
+                summary_provider=lambda: [],
+                tail_provider=lambda name, lines: "",
+                codex_binary="sh",
+                steward_startup_settle_seconds=0,
+                codex_startup_prompt_settle_seconds=0,
+            )
+
+            status = controller.set_enabled(True)
+            controller.shutdown()
+
+        self.assertTrue(status.enabled)
+        self.assertTrue(status.steward_running)
+        self.assertEqual(tmux.killed_sessions, ["steward"])
+        self.assertEqual(len(tmux.new_sessions), 1)
+        self.assertIsNone(store.get().report_requested_at)
 
     def test_steward_start_command_uses_compatible_codex_flags(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
