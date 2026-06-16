@@ -3,6 +3,8 @@ import unittest
 from fastapi.testclient import TestClient
 
 from app import main
+from app.managed_mode import ManagedModeError
+from app.models import ManagedModeStatus
 from app.tmux_client import TmuxError
 
 
@@ -26,13 +28,44 @@ class ExplodingTmuxClient(FakeTmuxClient):
         raise TmuxError("tmux send failed")
 
 
+class FakeMetadataStore:
+    def __init__(self) -> None:
+        self.updates: list[tuple[str, object]] = []
+
+    def update(self, name: str, patch: object) -> object:
+        self.updates.append((name, patch))
+        return patch
+
+
+class FakeManagedModeController:
+    def __init__(self) -> None:
+        self.enabled_values: list[bool] = []
+
+    def status(self) -> ManagedModeStatus:
+        return ManagedModeStatus(enabled=False, steward_running=False)
+
+    def set_enabled(self, enabled: bool) -> ManagedModeStatus:
+        self.enabled_values.append(enabled)
+        return ManagedModeStatus(enabled=enabled, steward_running=enabled)
+
+
+class ExplodingManagedModeController(FakeManagedModeController):
+    def set_enabled(self, enabled: bool) -> ManagedModeStatus:
+        raise ManagedModeError("managed mode failed")
+
+
 class SessionInputApiTest(unittest.TestCase):
     def setUp(self) -> None:
         self.original_tmux_client = main.tmux_client
+        self.original_metadata_store = main.metadata_store
+        self.original_managed_mode_controller = main.managed_mode_controller
+        main.metadata_store = FakeMetadataStore()
         self.client = TestClient(main.app)
 
     def tearDown(self) -> None:
         main.tmux_client = self.original_tmux_client
+        main.metadata_store = self.original_metadata_store
+        main.managed_mode_controller = self.original_managed_mode_controller
 
     def test_send_session_input_posts_literal_text_and_enter(self) -> None:
         fake = FakeTmuxClient(["codex"])
@@ -86,6 +119,34 @@ class SessionInputApiTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 503)
         self.assertEqual(response.json(), {"detail": "tmux send failed"})
+
+    def test_managed_mode_status(self) -> None:
+        main.managed_mode_controller = FakeManagedModeController()
+
+        response = self.client.get("/api/managed-mode")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.json()["enabled"])
+        self.assertFalse(response.json()["steward_running"])
+
+    def test_update_managed_mode(self) -> None:
+        fake = FakeManagedModeController()
+        main.managed_mode_controller = fake
+
+        response = self.client.post("/api/managed-mode", json={"enabled": True})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["enabled"])
+        self.assertTrue(response.json()["steward_running"])
+        self.assertEqual(fake.enabled_values, [True])
+
+    def test_update_managed_mode_surfaces_errors(self) -> None:
+        main.managed_mode_controller = ExplodingManagedModeController()
+
+        response = self.client.post("/api/managed-mode", json={"enabled": True})
+
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.json(), {"detail": "managed mode failed"})
 
 
 if __name__ == "__main__":

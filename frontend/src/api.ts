@@ -1,5 +1,7 @@
 import type {
   HealthResponse,
+  ManagedModePatch,
+  ManagedModeStatus,
   SessionInputRequest,
   SessionInputResponse,
   SessionDetail,
@@ -36,6 +38,24 @@ export function fetchHealth(signal?: AbortSignal): Promise<HealthResponse> {
 
 export function fetchSessions(signal?: AbortSignal): Promise<SessionsResponse> {
   return request<SessionsResponse>("/api/sessions", { signal });
+}
+
+export function fetchManagedMode(signal?: AbortSignal): Promise<ManagedModeStatus> {
+  return request<ManagedModeStatus>("/api/managed-mode", { signal });
+}
+
+export function updateManagedMode(
+  patch: ManagedModePatch,
+  signal?: AbortSignal,
+): Promise<ManagedModeStatus> {
+  return request<ManagedModeStatus>("/api/managed-mode", {
+    body: JSON.stringify(patch),
+    headers: {
+      "Content-Type": "application/json",
+    },
+    method: "POST",
+    signal,
+  });
 }
 
 export function fetchSession(name: string, signal?: AbortSignal): Promise<SessionDetail> {

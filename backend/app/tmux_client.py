@@ -96,6 +96,24 @@ class TmuxClient:
     def send_key(self, name: str, key: str) -> None:
         self._run(["send-keys", "-t", name, key])
 
+    def new_session(self, name: str, command: str, start_directory: Optional[str] = None) -> None:
+        args = ["new-session", "-d", "-s", name]
+        if start_directory:
+            args.extend(["-c", start_directory])
+        args.append(command)
+        self._run(args)
+
+    def kill_session(self, name: str) -> None:
+        result = self._run(["kill-session", "-t", name], check=False)
+        if result.returncode == 0:
+            return
+
+        stderr = result.stderr.lower()
+        if "can't find session" in stderr or "can't find pane" in stderr:
+            return
+
+        raise TmuxError(result.stderr.strip() or f"tmux kill-session failed: {name}")
+
     def _run(self, args: list[str], check: bool = True) -> subprocess.CompletedProcess[str]:
         try:
             result = subprocess.run(

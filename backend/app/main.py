@@ -9,10 +9,13 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from .analyzer import analyze_session
+from .managed_mode import ManagedModeController, ManagedModeError, ManagedModeStore
 from .metadata_store import MetadataStore
 from .models import (
     STATUS_PRIORITY,
     HealthResponse,
+    ManagedModePatch,
+    ManagedModeStatus,
     SessionInputRequest,
     SessionInputResponse,
     SessionMetadata,
@@ -51,13 +54,32 @@ def _metadata_path() -> Path:
     return Path(__file__).resolve().parents[1] / "data" / "session_metadata.json"
 
 
+def _managed_mode_path() -> Path:
+    explicit_path = os.getenv("CODEX_MONITOR_MANAGED_MODE_PATH")
+    if explicit_path:
+        return Path(explicit_path).expanduser()
+
+    data_dir = os.getenv("CODEX_MONITOR_DATA_DIR")
+    if data_dir:
+        return Path(data_dir).expanduser() / "managed_mode.json"
+
+    return Path(__file__).resolve().parents[1] / "data" / "managed_mode.json"
+
+
 tmux_client = TmuxClient()
 state_store = StateStore()
 metadata_store = MetadataStore(_metadata_path())
+managed_mode_controller: ManagedModeController | None = None
 FRONTEND_DIST = Path(__file__).resolve().parents[2] / "frontend" / "dist"
 
 if (FRONTEND_DIST / "assets").exists():
     app.mount("/assets", StaticFiles(directory=FRONTEND_DIST / "assets"), name="assets")
+
+
+@app.on_event("shutdown")
+def shutdown_managed_mode() -> None:
+    if managed_mode_controller is not None:
+        managed_mode_controller.shutdown()
 
 
 @app.get("/api/health", response_model=HealthResponse)
@@ -76,6 +98,29 @@ def sessions() -> SessionsResponse:
     summaries = [_build_summary(name) for name in names]
     summaries.sort(key=lambda item: (STATUS_PRIORITY[item.status], item.name.lower()))
     return SessionsResponse(sessions=summaries)
+
+
+@app.get("/api/managed-mode", response_model=ManagedModeStatus)
+def managed_mode_status() -> ManagedModeStatus:
+    try:
+        return _managed_controller().status()
+    except (ManagedModeError, TmuxError, ValueError) as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@app.post("/api/managed-mode", response_model=ManagedModeStatus)
+def update_managed_mode(patch: ManagedModePatch) -> ManagedModeStatus:
+    try:
+        status = _managed_controller().set_enabled(patch.enabled)
+    except (ManagedModeError, TmuxError, ValueError) as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    if status.enabled:
+        metadata_store.update(
+            status.steward_session,
+            SessionMetadataPatch(group="AgentMonitor", note="Managed Mode Steward"),
+        )
+    return status
 
 
 @app.get("/api/sessions/{name}", response_model=SessionDetail)
@@ -149,6 +194,25 @@ def _safe_list_sessions() -> list[str]:
 
     state_store.prune(set(names))
     return names
+
+
+def _list_session_summaries() -> list[SessionSummary]:
+    names = tmux_client.list_sessions()
+    state_store.prune(set(names))
+    return [_build_summary(name) for name in names]
+
+
+def _managed_controller() -> ManagedModeController:
+    global managed_mode_controller
+    if managed_mode_controller is None:
+        managed_mode_controller = ManagedModeController(
+            store=ManagedModeStore(_managed_mode_path()),
+            tmux_client=tmux_client,
+            project_root=Path(__file__).resolve().parents[2],
+            summary_provider=_list_session_summaries,
+            tail_provider=tmux_client.capture_session,
+        )
+    return managed_mode_controller
 
 
 def _frontend_index() -> FileResponse:

@@ -14,6 +14,9 @@ for input.
 - Compact dashboard for quick all-session monitoring.
 - Detailed session list with live tail previews.
 - Per-session archive, collapse, group, and display-name notes.
+- Web input controls for sending text, Enter, and Ctrl-C to a selected session.
+- Managed Mode with a dedicated Codex steward session for coordinating
+  unarchived Codex agents.
 - Local JSON metadata storage.
 - Single-port production build served by FastAPI.
 - Docker Compose and local script based startup.
@@ -104,6 +107,7 @@ Environment variables:
 | `PYTHON_BIN` | `python3` | Python executable for scripts. |
 | `CODEX_MONITOR_DATA_DIR` | `backend/data` | Directory for runtime metadata. |
 | `CODEX_MONITOR_METADATA_PATH` | unset | Exact metadata JSON path. Overrides `CODEX_MONITOR_DATA_DIR`. |
+| `CODEX_MONITOR_MANAGED_MODE_PATH` | unset | Exact Managed Mode JSON state path. Overrides `CODEX_MONITOR_DATA_DIR` for this file. |
 | `VITE_DEV_API_TARGET` | `http://localhost:8766` | Vite dev proxy target. `scripts/dev.sh` sets this automatically. |
 
 Runtime metadata is stored in `session_metadata.json` and contains only UI
@@ -115,6 +119,13 @@ annotations:
 - `note`
 
 Do not commit this file.
+
+Managed Mode state is stored in `managed_mode.json`. When enabled, the backend
+creates or reuses the `agentmonitor-steward` tmux session and sends it a
+periodic brief of eligible targets. Eligible targets are unarchived tmux
+sessions whose current pane command looks like the Codex TUI (`codex` or
+`node`), excluding AgentMonitor-owned sessions. Archived sessions are never
+included in the steward brief.
 
 ## Codex Status Footer
 
@@ -148,16 +159,20 @@ GET   /api/health
 GET   /api/sessions
 GET   /api/sessions/{name}
 PATCH /api/sessions/{name}/metadata
+POST  /api/sessions/{name}/input
+GET   /api/managed-mode
+POST  /api/managed-mode
 ```
 
-The service is read-only with respect to tmux. It captures pane output and
-metadata, but it does not send keys, write to sessions, or change running
-processes.
+The input and Managed Mode endpoints can send keys to tmux sessions. Managed
+Mode can also start and stop the `agentmonitor-steward` tmux session.
 
 ## Security
 
 The dashboard displays tmux pane output. Pane output may contain secrets,
-private prompts, local paths, or project context.
+private prompts, local paths, or project context. The dashboard can also send
+input to tmux sessions and, when Managed Mode is enabled, start a Codex steward
+agent that can coordinate other unarchived Codex agents.
 
 For local use, bind to `127.0.0.1`. If you expose the app over a network, put
 authentication in front of it.

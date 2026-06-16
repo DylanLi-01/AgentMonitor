@@ -219,6 +219,128 @@ h2 {
   color: #725113;
 }
 
+.managed-panel {
+  display: grid;
+  gap: 10px;
+  margin-top: 18px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+  background:
+    linear-gradient(180deg, #ffffff 0, #fbfcfe 100%),
+    var(--surface);
+  box-shadow: var(--shadow-soft);
+}
+
+.managed-panel.is-on {
+  border-color: #a8bedc;
+  background:
+    linear-gradient(180deg, #ffffff 0, #f4f8ff 100%),
+    var(--surface-active);
+}
+
+.managed-main {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.managed-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.managed-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 34px;
+  height: 34px;
+  border: 1px solid #b8c7dc;
+  border-radius: 8px;
+  background: #eef5ff;
+  color: #24599d;
+}
+
+.managed-title p,
+.managed-summary {
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.managed-toggle {
+  gap: 6px;
+}
+
+.managed-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.managed-metric {
+  display: grid;
+  gap: 4px;
+  min-height: 58px;
+  border: 1px solid var(--line-soft);
+  border-radius: 7px;
+  padding: 8px 9px;
+  background: #ffffff;
+}
+
+.managed-metric span {
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 760;
+  text-transform: uppercase;
+}
+
+.managed-metric strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.managed-targets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.managed-targets span {
+  max-width: 260px;
+  overflow: hidden;
+  border: 1px solid var(--line-soft);
+  border-radius: 999px;
+  padding: 3px 8px;
+  background: #ffffff;
+  color: #3f4a58;
+  font-size: 11px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.managed-error {
+  overflow-wrap: anywhere;
+  border: 1px solid var(--status-error-line);
+  border-radius: 7px;
+  padding: 8px 10px;
+  background: var(--status-error-tint);
+  color: #9b271f;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
 .overview-band {
   margin-top: 20px;
   border: 1px solid var(--line);
@@ -1227,6 +1349,15 @@ h2 {
     align-items: flex-start;
     flex-direction: column;
     gap: 4px;
+  }
+
+  .managed-main {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .managed-grid {
+    grid-template-columns: 1fr 1fr;
   }
 
   .summary-grid {

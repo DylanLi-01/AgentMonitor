@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Literal
 from typing import Optional
@@ -92,3 +92,26 @@ class SessionInputRequest(BaseModel):
 
 class SessionInputResponse(BaseModel):
     ok: bool = True
+
+
+def utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+class ManagedModePatch(BaseModel):
+    enabled: bool
+
+
+class ManagedModeState(BaseModel):
+    enabled: bool = False
+    steward_session: str = Field(default="agentmonitor-steward", min_length=1, max_length=120)
+    interval_seconds: int = Field(default=180, ge=30, le=3600)
+    last_dispatch_at: Optional[datetime] = None
+    last_error: Optional[str] = None
+    last_summary: str = ""
+    last_targets: list[str] = Field(default_factory=list)
+    updated_at: datetime = Field(default_factory=utc_now)
+
+
+class ManagedModeStatus(ManagedModeState):
+    steward_running: bool = False

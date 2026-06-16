@@ -61,3 +61,19 @@ export interface SessionInputRequest {
 export interface SessionInputResponse {
   ok: boolean;
 }
+
+export interface ManagedModeStatus {
+  enabled: boolean;
+  steward_session: string;
+  interval_seconds: number;
+  last_dispatch_at: string | null;
+  last_error: string | null;
+  last_summary: string;
+  last_targets: string[];
+  updated_at: string;
+  steward_running: boolean;
+}
+
+export interface ManagedModePatch {
+  enabled: boolean;
+}

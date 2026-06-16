@@ -50,6 +50,28 @@ class TmuxClientTest(unittest.TestCase):
 
         self.assertEqual(client.calls, [["send-keys", "-t", "codex", "C-c"]])
 
+    def test_new_session_uses_start_directory_and_command(self) -> None:
+        client = RecordingTmuxClient()
+
+        client.new_session("steward", "codex --no-alt-screen", start_directory="/tmp/project")
+
+        self.assertEqual(
+            client.calls,
+            [["new-session", "-d", "-s", "steward", "-c", "/tmp/project", "codex --no-alt-screen"]],
+        )
+
+    def test_kill_session_ignores_missing_session(self) -> None:
+        class MissingSessionTmuxClient(TmuxClient):
+            def _run(self, args: list[str], check: bool = True) -> subprocess.CompletedProcess[str]:
+                return subprocess.CompletedProcess(
+                    ["tmux", *args],
+                    1,
+                    "",
+                    "can't find session: missing",
+                )
+
+        MissingSessionTmuxClient().kill_session("missing")
+
 
 if __name__ == "__main__":
     unittest.main()

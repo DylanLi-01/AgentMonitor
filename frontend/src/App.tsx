@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 import {
   Archive,
   ArchiveRestore,
+  Bot,
   ChevronDown,
   ChevronRight,
   CornerDownLeft,
@@ -10,12 +11,22 @@ import {
   EyeOff,
   Folder,
   Pencil,
+  Power,
   Save,
   Send,
   X,
 } from "lucide-react";
-import { fetchHealth, fetchSession, fetchSessions, patchSessionMetadata, sendSessionInput } from "./api";
+import {
+  fetchHealth,
+  fetchManagedMode,
+  fetchSession,
+  fetchSessions,
+  patchSessionMetadata,
+  sendSessionInput,
+  updateManagedMode,
+} from "./api";
 import type {
+  ManagedModeStatus,
   SessionMetadata,
   SessionMetadataPatch,
   HealthResponse,
@@ -71,8 +82,11 @@ function App() {
 
 function OverviewPage() {
   const [health, setHealth] = useState<HealthResponse | null>(null);
+  const [managedMode, setManagedMode] = useState<ManagedModeStatus | null>(null);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [managedModeError, setManagedModeError] = useState<string | null>(null);
+  const [managedModeBusy, setManagedModeBusy] = useState(false);
   const [loading, setLoading] = useState(true);
   const [showArchived, setShowArchived] = useState(false);
   const [collapsedGroups, setCollapsedGroups] = useState<string[]>([]);
@@ -85,13 +99,15 @@ function OverviewPage() {
       controller?.abort();
       controller = new AbortController();
       try {
-        const [healthResult, sessionsResult] = await Promise.all([
+        const [healthResult, sessionsResult, managedModeResult] = await Promise.all([
           fetchHealth(controller.signal),
           fetchSessions(controller.signal),
+          fetchManagedMode(controller.signal),
         ]);
         if (!alive) return;
         setHealth(healthResult);
         setSessions(sessionsResult.sessions);
+        setManagedMode(managedModeResult);
         setError(null);
       } catch (err) {
         if (!alive || (err instanceof DOMException && err.name === "AbortError")) return;
@@ -109,6 +125,19 @@ function OverviewPage() {
       window.clearInterval(timer);
     };
   }, []);
+
+  async function toggleManagedMode(enabled: boolean) {
+    setManagedModeBusy(true);
+    setManagedModeError(null);
+    try {
+      const result = await updateManagedMode({ enabled });
+      setManagedMode(result);
+    } catch (err) {
+      setManagedModeError(err instanceof Error ? err.message : "Unable to update managed mode");
+    } finally {
+      setManagedModeBusy(false);
+    }
+  }
 
   async function updateMetadata(name: string, patch: SessionMetadataPatch) {
     const metadata = await patchSessionMetadata(name, patch);
@@ -138,6 +167,13 @@ function OverviewPage() {
   return (
     <main className="app-shell">
       <Header health={health} />
+
+      <ManagedModePanel
+        status={managedMode}
+        busy={managedModeBusy}
+        error={managedModeError}
+        onToggle={toggleManagedMode}
+      />
 
       <section className="overview-band" aria-label="Session status summary">
         <div className="summary-grid">
@@ -225,6 +261,83 @@ function OverviewPage() {
         </div>
       </section>
     </main>
+  );
+}
+
+function ManagedModePanel({
+  status,
+  busy,
+  error,
+  onToggle,
+}: {
+  status: ManagedModeStatus | null;
+  busy: boolean;
+  error: string | null;
+  onToggle: (enabled: boolean) => Promise<void>;
+}) {
+  const enabled = status?.enabled ?? false;
+  const visibleError = error || status?.last_error || null;
+
+  return (
+    <section className={`managed-panel ${enabled ? "is-on" : ""}`} aria-label="Managed mode">
+      <div className="managed-main">
+        <div className="managed-title">
+          <span className="managed-icon">
+            <Bot size={18} />
+          </span>
+          <div>
+            <h2>Managed Mode</h2>
+            <p>{enabled ? "Steward is coordinating active agents" : "Steward is off"}</p>
+          </div>
+        </div>
+        <button
+          className={`toggle-button managed-toggle ${enabled ? "is-on" : ""}`}
+          type="button"
+          disabled={busy || status === null}
+          onClick={() => void onToggle(!enabled)}
+        >
+          <Power size={16} />
+          {busy ? "Updating" : enabled ? "Disable" : "Enable"}
+        </button>
+      </div>
+
+      <div className="managed-grid">
+        <ManagedMetric label="Status" value={enabled ? "Enabled" : status ? "Off" : "Loading"} />
+        <ManagedMetric
+          label="Steward"
+          value={status?.steward_running ? status.steward_session : "Stopped"}
+        />
+        <ManagedMetric
+          label="Interval"
+          value={status ? formatInterval(status.interval_seconds) : "Loading"}
+        />
+        <ManagedMetric
+          label="Last Dispatch"
+          value={status?.last_dispatch_at ? formatTime(status.last_dispatch_at) : "None"}
+        />
+      </div>
+
+      {status?.last_summary ? <p className="managed-summary">{status.last_summary}</p> : null}
+
+      {status?.last_targets.length ? (
+        <div className="managed-targets" aria-label="Last managed targets">
+          {status.last_targets.map((target) => (
+            <span key={target}>{target}</span>
+          ))}
+        </div>
+      ) : null}
+
+      {visibleError ? <div className="managed-error">{visibleError}</div> : null}
+    </section>
+  );
+}
+
+function ManagedMetric({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="managed-metric">
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </div>
   );
 }
 
@@ -957,6 +1070,14 @@ function formatIdleCompact(seconds: number) {
   const hours = Math.floor(minutes / 60);
   const remainingMinutes = minutes % 60;
   return remainingMinutes > 0 ? `${hours}h ${remainingMinutes}m` : `${hours}h`;
+}
+
+function formatInterval(seconds: number) {
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  return `${hours}h`;
 }
 
 function formatTime(value: string) {
