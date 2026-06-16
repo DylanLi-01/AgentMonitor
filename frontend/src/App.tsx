@@ -139,6 +139,19 @@ function OverviewPage() {
     }
   }
 
+  async function updateManagedInterval(intervalSeconds: number) {
+    setManagedModeBusy(true);
+    setManagedModeError(null);
+    try {
+      const result = await updateManagedMode({ interval_seconds: intervalSeconds });
+      setManagedMode(result);
+    } catch (err) {
+      setManagedModeError(err instanceof Error ? err.message : "Unable to update managed mode interval");
+    } finally {
+      setManagedModeBusy(false);
+    }
+  }
+
   async function updateMetadata(name: string, patch: SessionMetadataPatch) {
     const metadata = await patchSessionMetadata(name, patch);
     setSessions((current) =>
@@ -173,6 +186,7 @@ function OverviewPage() {
         busy={managedModeBusy}
         error={managedModeError}
         onToggle={toggleManagedMode}
+        onIntervalChange={updateManagedInterval}
       />
 
       <section className="overview-band" aria-label="Session status summary">
@@ -269,15 +283,39 @@ function ManagedModePanel({
   busy,
   error,
   onToggle,
+  onIntervalChange,
 }: {
   status: ManagedModeStatus | null;
   busy: boolean;
   error: string | null;
   onToggle: (enabled: boolean) => Promise<void>;
+  onIntervalChange: (intervalSeconds: number) => Promise<void>;
 }) {
   const enabled = status?.enabled ?? false;
   const visibleError = error || status?.last_error || null;
   const reportLines = status?.report_requested_at ? status.steward_tail : [];
+  const [intervalDraft, setIntervalDraft] = useState("3");
+  const [editingInterval, setEditingInterval] = useState(false);
+  const [intervalError, setIntervalError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!editingInterval && status) {
+      setIntervalDraft(String(status.interval_seconds / 60));
+      setIntervalError(null);
+    }
+  }, [editingInterval, status?.interval_seconds, status]);
+
+  async function saveInterval(minutesValue: string) {
+    const minutes = Number(minutesValue);
+    if (!Number.isInteger(minutes) || minutes < 1 || minutes > 60) {
+      setIntervalError("Interval must be a whole number from 1 to 60 minutes.");
+      return;
+    }
+
+    setIntervalError(null);
+    await onIntervalChange(minutes * 60);
+    setEditingInterval(false);
+  }
 
   return (
     <section className={`managed-panel ${enabled ? "is-on" : ""}`} aria-label="Managed mode">
@@ -329,6 +367,57 @@ function ManagedModePanel({
       </div>
 
       {status?.last_summary ? <p className="managed-summary">{status.last_summary}</p> : null}
+
+      <form
+        className="managed-interval-form"
+        onSubmit={(event) => {
+          event.preventDefault();
+          void saveInterval(intervalDraft);
+        }}
+      >
+        <label>
+          <span>Dispatch interval</span>
+          <input
+            aria-label="Managed mode dispatch interval in minutes"
+            disabled={busy || status === null}
+            min={1}
+            max={60}
+            step={1}
+            type="number"
+            value={intervalDraft}
+            onChange={(event) => {
+              setEditingInterval(true);
+              setIntervalDraft(event.target.value);
+            }}
+            onFocus={() => setEditingInterval(true)}
+          />
+        </label>
+        <span className="managed-interval-unit">minutes</span>
+        <ActionButton label="Save managed mode interval" type="submit" disabled={busy || status === null}>
+          <Save size={16} />
+          <span>Save</span>
+        </ActionButton>
+        <div className="managed-interval-presets">
+          {[1, 3, 5, 10].map((minutes) => (
+            <button
+              className="preset-button"
+              disabled={busy || status === null}
+              key={minutes}
+              type="button"
+              onClick={() => {
+                setIntervalDraft(String(minutes));
+                setEditingInterval(false);
+                setIntervalError(null);
+                void onIntervalChange(minutes * 60);
+              }}
+            >
+              {minutes}m
+            </button>
+          ))}
+        </div>
+      </form>
+
+      {intervalError ? <div className="managed-error">{intervalError}</div> : null}
 
       {status?.last_targets.length ? (
         <div className="managed-targets" aria-label="Last managed targets">

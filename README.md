@@ -125,7 +125,9 @@ creates or reuses the `agentmonitor-steward` tmux session and sends it a
 periodic brief of eligible targets. Eligible targets are unarchived tmux
 sessions whose current pane command looks like the Codex TUI (`codex` or
 `node`), excluding AgentMonitor-owned sessions. Archived sessions are never
-included in the steward brief.
+included in the steward brief. The dispatch interval can be adjusted from the
+web UI and is persisted in the same state file. The API validates the interval
+as 30 to 3600 seconds; the UI exposes whole-minute values from 1 to 60 minutes.
 
 The steward prompt is intentionally conservative. It tells the steward to prefer
 reviewing existing code, running focused tests, inspecting logs, reproducing

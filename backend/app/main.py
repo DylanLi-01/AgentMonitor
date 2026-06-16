@@ -110,8 +110,16 @@ def managed_mode_status() -> ManagedModeStatus:
 
 @app.post("/api/managed-mode", response_model=ManagedModeStatus)
 def update_managed_mode(patch: ManagedModePatch) -> ManagedModeStatus:
+    if patch.enabled is None and patch.interval_seconds is None:
+        raise HTTPException(status_code=400, detail="Managed mode patch is empty")
+
     try:
-        status = _managed_controller().set_enabled(patch.enabled)
+        controller = _managed_controller()
+        status = controller.status()
+        if patch.interval_seconds is not None:
+            status = controller.set_interval(patch.interval_seconds)
+        if patch.enabled is not None:
+            status = controller.set_enabled(patch.enabled)
     except (ManagedModeError, TmuxError, ValueError) as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 

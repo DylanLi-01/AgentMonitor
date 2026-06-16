@@ -40,6 +40,7 @@ class FakeMetadataStore:
 class FakeManagedModeController:
     def __init__(self) -> None:
         self.enabled_values: list[bool] = []
+        self.interval_values: list[int] = []
 
     def status(self) -> ManagedModeStatus:
         return ManagedModeStatus(enabled=False, steward_running=False)
@@ -47,6 +48,10 @@ class FakeManagedModeController:
     def set_enabled(self, enabled: bool) -> ManagedModeStatus:
         self.enabled_values.append(enabled)
         return ManagedModeStatus(enabled=enabled, steward_running=enabled)
+
+    def set_interval(self, interval_seconds: int) -> ManagedModeStatus:
+        self.interval_values.append(interval_seconds)
+        return ManagedModeStatus(interval_seconds=interval_seconds, steward_running=False)
 
 
 class ExplodingManagedModeController(FakeManagedModeController):
@@ -139,6 +144,25 @@ class SessionInputApiTest(unittest.TestCase):
         self.assertTrue(response.json()["enabled"])
         self.assertTrue(response.json()["steward_running"])
         self.assertEqual(fake.enabled_values, [True])
+
+    def test_update_managed_mode_interval(self) -> None:
+        fake = FakeManagedModeController()
+        main.managed_mode_controller = fake
+
+        response = self.client.post("/api/managed-mode", json={"interval_seconds": 300})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["interval_seconds"], 300)
+        self.assertEqual(fake.interval_values, [300])
+        self.assertEqual(fake.enabled_values, [])
+
+    def test_update_managed_mode_rejects_empty_patch(self) -> None:
+        main.managed_mode_controller = FakeManagedModeController()
+
+        response = self.client.post("/api/managed-mode", json={})
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json(), {"detail": "Managed mode patch is empty"})
 
     def test_update_managed_mode_surfaces_errors(self) -> None:
         main.managed_mode_controller = ExplodingManagedModeController()

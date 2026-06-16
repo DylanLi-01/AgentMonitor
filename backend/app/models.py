@@ -99,7 +99,8 @@ def utc_now() -> datetime:
 
 
 class ManagedModePatch(BaseModel):
-    enabled: bool
+    enabled: Optional[bool] = None
+    interval_seconds: Optional[int] = Field(default=None, ge=30, le=3600)
 
 
 class ManagedModeState(BaseModel):

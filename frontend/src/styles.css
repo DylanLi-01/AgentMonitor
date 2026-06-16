@@ -316,6 +316,76 @@ h2 {
   gap: 6px;
 }
 
+.managed-interval-form {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.managed-interval-form label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 720;
+}
+
+.managed-interval-form input {
+  width: 76px;
+  min-height: 30px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 0 8px;
+  background: #ffffff;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 720;
+}
+
+.managed-interval-form input:focus {
+  border-color: var(--focus);
+  outline: none;
+  box-shadow: var(--ring);
+}
+
+.managed-interval-unit {
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.managed-interval-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.preset-button {
+  min-height: 28px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 0 8px;
+  background: #ffffff;
+  color: #3f4a58;
+  font-size: 12px;
+  font-weight: 720;
+  cursor: pointer;
+}
+
+.preset-button:hover,
+.preset-button:focus-visible {
+  border-color: #adc0d8;
+  background: #f5f8fc;
+  outline: none;
+}
+
+.preset-button:disabled {
+  cursor: wait;
+  opacity: 0.52;
+}
+
 .managed-targets span {
   max-width: 260px;
   overflow: hidden;
@@ -1371,6 +1441,11 @@ h2 {
   }
 
   .managed-main {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .managed-interval-form {
     align-items: flex-start;
     flex-direction: column;
   }

@@ -154,6 +154,10 @@ class ManagedModeController:
                 )
         return self.status()
 
+    def set_interval(self, interval_seconds: int) -> ManagedModeStatus:
+        self._store.update(interval_seconds=interval_seconds, last_error=None)
+        return self.status()
+
     def shutdown(self) -> None:
         self._stop_event.set()
 

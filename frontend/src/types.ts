@@ -77,5 +77,6 @@ export interface ManagedModeStatus {
 }
 
 export interface ManagedModePatch {
-  enabled: boolean;
+  enabled?: boolean;
+  interval_seconds?: number;
 }
