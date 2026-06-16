@@ -13,11 +13,25 @@ import type {
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "";
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const response = await fetch(`${API_BASE_URL}${path}`, init);
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}${path}`, init);
+  } catch (err) {
+    if (isAbortError(err, init.signal)) throw err;
+    throw new Error(formatNetworkError(err));
+  }
+
   if (!response.ok) {
     const message = await response.text();
     throw new Error(extractErrorMessage(message) || `Request failed with ${response.status}`);
   }
+
+  const contentType = response.headers.get("content-type") ?? "";
+  if (!contentType.includes("application/json")) {
+    const message = await response.text();
+    throw new Error(extractUnexpectedContentMessage(message, response.url, contentType));
+  }
+
   return response.json() as Promise<T>;
 }
 
@@ -30,6 +44,28 @@ function extractErrorMessage(message: string): string {
     return message;
   }
   return message;
+}
+
+export function isAbortError(err: unknown, signal?: AbortSignal | null): boolean {
+  if (signal?.aborted) return true;
+  if (err instanceof DOMException && err.name === "AbortError") return true;
+  if (!(err instanceof Error)) return false;
+  return err.name === "AbortError";
+}
+
+function formatNetworkError(err: unknown): string {
+  const message = err instanceof Error ? err.message : "";
+  if (message === "Load failed" || message === "Failed to fetch") {
+    return "Network request failed. If this is the Highway URL, refresh the page and re-authenticate with Cloudflare Access.";
+  }
+  return message || "Network request failed.";
+}
+
+function extractUnexpectedContentMessage(message: string, url: string, contentType: string): string {
+  if (message.includes("Cloudflare Access") || url.includes("cloudflareaccess.com")) {
+    return "Highway authentication expired. Refresh the page and re-authenticate with Cloudflare Access.";
+  }
+  return `Expected JSON from the API but received ${contentType || "unknown content type"}.`;
 }
 
 export function fetchHealth(signal?: AbortSignal): Promise<HealthResponse> {

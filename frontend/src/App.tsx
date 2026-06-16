@@ -21,6 +21,7 @@ import {
   fetchManagedMode,
   fetchSession,
   fetchSessions,
+  isAbortError,
   patchSessionMetadata,
   sendSessionInput,
   updateManagedMode,
@@ -97,12 +98,13 @@ function OverviewPage() {
 
     async function load() {
       controller?.abort();
-      controller = new AbortController();
+      const requestController = new AbortController();
+      controller = requestController;
       try {
         const [healthResult, sessionsResult, managedModeResult] = await Promise.all([
-          fetchHealth(controller.signal),
-          fetchSessions(controller.signal),
-          fetchManagedMode(controller.signal),
+          fetchHealth(requestController.signal),
+          fetchSessions(requestController.signal),
+          fetchManagedMode(requestController.signal),
         ]);
         if (!alive) return;
         setHealth(healthResult);
@@ -110,7 +112,7 @@ function OverviewPage() {
         setManagedMode(managedModeResult);
         setError(null);
       } catch (err) {
-        if (!alive || (err instanceof DOMException && err.name === "AbortError")) return;
+        if (!alive || isAbortError(err, requestController.signal)) return;
         setError(err instanceof Error ? err.message : "Unable to load sessions");
       } finally {
         if (alive) setLoading(false);
@@ -527,14 +529,15 @@ function SessionDetailPage({ name }: { name: string }) {
 
     async function load() {
       controller?.abort();
-      controller = new AbortController();
+      const requestController = new AbortController();
+      controller = requestController;
       try {
-        const result = await fetchSession(name, controller.signal);
+        const result = await fetchSession(name, requestController.signal);
         if (!alive) return;
         setSession(result);
         setError(null);
       } catch (err) {
-        if (!alive || (err instanceof DOMException && err.name === "AbortError")) return;
+        if (!alive || isAbortError(err, requestController.signal)) return;
         setError(err instanceof Error ? err.message : "Unable to load session");
       }
     }
