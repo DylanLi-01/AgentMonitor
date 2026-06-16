@@ -1,0 +1,12 @@
+.git
+.github
+.env
+backend/.venv
+backend/.pytest_cache
+backend/**/__pycache__
+backend/data/session_metadata.json
+frontend/node_modules
+frontend/dist
+*.pyc
+*.tsbuildinfo
+.DS_Store

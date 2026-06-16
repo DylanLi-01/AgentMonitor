@@ -1,0 +1,16 @@
+services:
+  codex-tmux-monitor:
+    build: .
+    image: codex-tmux-monitor:local
+    user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
+    environment:
+      CODEX_MONITOR_DATA_DIR: /data
+      HOME: /tmp
+      PORT: "${PORT:-8765}"
+      TMUX_TMPDIR: /tmp
+    ports:
+      - "${PORT:-8765}:${PORT:-8765}"
+    volumes:
+      - ./backend/data:/data
+      - /tmp/tmux-${HOST_UID:-1000}:/tmp/tmux-${HOST_UID:-1000}
+    restart: unless-stopped

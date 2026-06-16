@@ -1,0 +1,168 @@
+from __future__ import annotations
+
+import os
+from pathlib import Path
+
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
+
+from .analyzer import analyze_session
+from .metadata_store import MetadataStore
+from .models import (
+    STATUS_PRIORITY,
+    HealthResponse,
+    SessionMetadata,
+    SessionMetadataPatch,
+    SessionDetail,
+    SessionSummary,
+    SessionsResponse,
+)
+from .state_store import StateStore
+from .tmux_client import TmuxClient, TmuxError
+
+
+app = FastAPI(title="Codex tmux Monitor", version="0.1.0")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+    ],
+    allow_credentials=False,
+    allow_methods=["GET", "PATCH"],
+    allow_headers=["*"],
+)
+
+
+def _metadata_path() -> Path:
+    explicit_path = os.getenv("CODEX_MONITOR_METADATA_PATH")
+    if explicit_path:
+        return Path(explicit_path).expanduser()
+
+    data_dir = os.getenv("CODEX_MONITOR_DATA_DIR")
+    if data_dir:
+        return Path(data_dir).expanduser() / "session_metadata.json"
+
+    return Path(__file__).resolve().parents[1] / "data" / "session_metadata.json"
+
+
+tmux_client = TmuxClient()
+state_store = StateStore()
+metadata_store = MetadataStore(_metadata_path())
+FRONTEND_DIST = Path(__file__).resolve().parents[2] / "frontend" / "dist"
+
+if (FRONTEND_DIST / "assets").exists():
+    app.mount("/assets", StaticFiles(directory=FRONTEND_DIST / "assets"), name="assets")
+
+
+@app.get("/api/health", response_model=HealthResponse)
+def health() -> HealthResponse:
+    sessions = _safe_list_sessions()
+    return HealthResponse(
+        ok=True,
+        tmux_available=tmux_client.tmux_available(),
+        session_count=len(sessions),
+    )
+
+
+@app.get("/api/sessions", response_model=SessionsResponse)
+def sessions() -> SessionsResponse:
+    names = _safe_list_sessions()
+    summaries = [_build_summary(name) for name in names]
+    summaries.sort(key=lambda item: (STATUS_PRIORITY[item.status], item.name.lower()))
+    return SessionsResponse(sessions=summaries)
+
+
+@app.get("/api/sessions/{name}", response_model=SessionDetail)
+def session_detail(name: str) -> SessionDetail:
+    names = set(_safe_list_sessions())
+    if name not in names:
+        raise HTTPException(status_code=404, detail=f"Session '{name}' not found")
+
+    summary = _build_summary(name)
+    tail_text = tmux_client.capture_session(name)
+    return SessionDetail(
+        **summary.model_dump(),
+        tail=tail_text.splitlines(),
+    )
+
+
+@app.patch("/api/sessions/{name}/metadata", response_model=SessionMetadata)
+def update_session_metadata(name: str, patch: SessionMetadataPatch) -> SessionMetadata:
+    try:
+        return metadata_store.update(name, patch)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/", include_in_schema=False)
+def frontend_index() -> FileResponse:
+    return _frontend_index()
+
+
+@app.get("/{full_path:path}", include_in_schema=False)
+def frontend_app(full_path: str) -> FileResponse:
+    if full_path.startswith("api/"):
+        raise HTTPException(status_code=404, detail="Not found")
+
+    candidate = (FRONTEND_DIST / full_path).resolve()
+    dist_root = FRONTEND_DIST.resolve()
+    if candidate.is_file() and (candidate == dist_root or dist_root in candidate.parents):
+        return FileResponse(candidate)
+
+    return _frontend_index()
+
+
+def _safe_list_sessions() -> list[str]:
+    try:
+        names = tmux_client.list_sessions()
+    except TmuxError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    state_store.prune(set(names))
+    return names
+
+
+def _frontend_index() -> FileResponse:
+    index_path = FRONTEND_DIST / "index.html"
+    if not index_path.exists():
+        raise HTTPException(
+            status_code=404,
+            detail="Frontend build not found. Run `npm run build` in frontend/.",
+        )
+    return FileResponse(index_path)
+
+
+def _build_summary(name: str) -> SessionSummary:
+    tail_text = tmux_client.capture_session(name)
+    current_command = tmux_client.get_current_command(name)
+    activity_time = tmux_client.get_activity_time(name)
+    changed, idle_seconds, last_activity = state_store.observe(
+        name,
+        tail_text,
+        external_activity=activity_time,
+    )
+    analysis = analyze_session(
+        tail_text=tail_text,
+        idle_seconds=idle_seconds,
+        changed=changed,
+        current_command=current_command,
+    )
+    metadata = metadata_store.get(name)
+
+    return SessionSummary(
+        name=name,
+        status=analysis.status,
+        idle_seconds=idle_seconds,
+        last_activity=last_activity,
+        preview=analysis.preview,
+        attention_reason=analysis.attention_reason,
+        current_command=current_command,
+        archived=metadata.archived,
+        collapsed=metadata.collapsed,
+        group=metadata.group,
+        note=metadata.note,
+    )
