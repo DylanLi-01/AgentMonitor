@@ -16,7 +16,7 @@ for input.
 - Per-session archive, collapse, group, and display-name notes.
 - Web input controls for sending text, Enter, and Ctrl-C to a selected session.
 - Managed Mode with a dedicated Codex steward session for coordinating
-  unarchived Codex agents.
+  unarchived Codex agents conservatively.
 - Local JSON metadata storage.
 - Single-port production build served by FastAPI.
 - Docker Compose and local script based startup.
@@ -126,6 +126,17 @@ periodic brief of eligible targets. Eligible targets are unarchived tmux
 sessions whose current pane command looks like the Codex TUI (`codex` or
 `node`), excluding AgentMonitor-owned sessions. Archived sessions are never
 included in the steward brief.
+
+The steward prompt is intentionally conservative. It tells the steward to prefer
+reviewing existing code, running focused tests, inspecting logs, reproducing
+errors, debugging current results, and summarizing status. It explicitly avoids
+broad implementations, rewrites, refactors, migrations, dependency upgrades,
+pushes, and deployments unless the requested work is small, localized, already
+requested by the user, and testable with existing checks.
+
+When Managed Mode is ended from the web UI, the backend stops future dispatches
+and asks the steward to write a final Chinese stewardship report. The steward
+session is left running so the report remains visible in the dashboard.
 
 ## Codex Status Footer
 

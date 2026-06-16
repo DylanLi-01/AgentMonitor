@@ -106,9 +106,14 @@ class ManagedModeController:
         state = self._store.get()
         if state.enabled:
             self._ensure_worker()
+        steward_running = self._session_exists(state.steward_session)
+        steward_tail = []
+        if steward_running:
+            steward_tail = self._tmux_client.capture_session(state.steward_session, lines=80).splitlines()
         return ManagedModeStatus(
             **state.model_dump(),
-            steward_running=self._session_exists(state.steward_session),
+            steward_running=steward_running,
+            steward_tail=steward_tail,
         )
 
     def set_enabled(self, enabled: bool) -> ManagedModeStatus:
@@ -125,10 +130,28 @@ class ManagedModeController:
                 raise
             return self.status()
 
-        self._store.update(enabled=False)
-        self._stop_event.set()
-        state = self._store.get()
-        self._tmux_client.kill_session(state.steward_session)
+        with self._dispatch_lock:
+            self._stop_event.set()
+            now = _utc_now()
+            state = self._store.update(
+                enabled=False,
+                last_error=None,
+            )
+            if self._session_exists(state.steward_session):
+                self._tmux_client.send_text(
+                    state.steward_session,
+                    build_steward_report_prompt(state, now),
+                    enter=True,
+                )
+                self._store.update(
+                    report_requested_at=now,
+                    last_summary="Managed mode ended; requested final stewardship report.",
+                )
+            else:
+                self._store.update(
+                    report_requested_at=None,
+                    last_summary="Managed mode ended; steward session was not running.",
+                )
         return self.status()
 
     def shutdown(self) -> None:
@@ -262,16 +285,42 @@ def build_steward_prompt(
             "# AgentMonitor Managed Mode Tick",
             f"timestamp_utc: {now.astimezone(timezone.utc).isoformat()}",
             "You are the AgentMonitor steward Codex agent.",
-            "Your job is to help only the listed, unarchived Codex tmux sessions make progress.",
+            "Your job is to conservatively supervise only the listed, unarchived Codex tmux sessions.",
+            "Default posture: observe, review existing code, run or ask for focused tests, diagnose failures, and summarize state.",
+            "Avoid aggressive development. Do not start broad implementations, refactors, rewrites, migrations, dependency upgrades, pushes, or deployments.",
+            "Only suggest implementation if it is small, localized, clearly requested by the user, and testable with existing checks.",
             "Do not touch archived sessions, unlisted sessions, or AgentMonitor's own sessions.",
             "Do not edit project files directly from this steward session; direct the target agents instead.",
-            "If a target can continue without a human decision, send it one concise instruction with tmux send-keys.",
+            "If a target can continue without a human decision, send it at most one concise, conservative instruction with tmux send-keys.",
+            "Prefer instructions such as: review the recent diff, run the smallest relevant test, inspect logs, reproduce the error, verify the current result, or write a status summary.",
             "If a target needs credentials, product judgment, or missing context, leave it alone and report that.",
             "Do not repeatedly send the same instruction if the tail already shows a recent steward nudge.",
             "When sending to a target, use literal tmux input and then Enter.",
             "Ask target agents to finish their replies with CODEX_STATUS so the monitor can classify them.",
             "Targets:",
             *target_blocks,
+        ]
+    )
+
+
+def build_steward_report_prompt(state: ManagedModeState, now: datetime) -> str:
+    last_targets = ", ".join(state.last_targets) if state.last_targets else "none"
+    return "\n\n".join(
+        [
+            "# AgentMonitor Managed Mode Final Report",
+            f"timestamp_utc: {now.astimezone(timezone.utc).isoformat()}",
+            "Managed Mode has been disabled. Stop sending instructions to other sessions.",
+            "Write a concise Chinese stewardship report in this steward session.",
+            "Report sections:",
+            "- 托管范围与目标",
+            "- 你发送过的指令或采取过的协调动作",
+            "- 各目标 session 的当前状态与证据",
+            "- 仍然需要用户决策的事项",
+            "- 建议用户回来后优先做的下一步",
+            "Be factual. If you did not take an action, say so. Do not invent outcomes.",
+            "Do not edit files, run project commands, or send more tmux input while writing this report.",
+            f"last_known_targets: {last_targets}",
+            "Finish with CODEX_STATUS status=done.",
         ]
     )
 

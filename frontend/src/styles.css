@@ -279,7 +279,7 @@ h2 {
 
 .managed-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
   gap: 8px;
 }
 
@@ -339,6 +339,25 @@ h2 {
   color: #9b271f;
   font-size: 12px;
   line-height: 1.4;
+}
+
+.managed-report {
+  overflow: auto;
+  max-height: 240px;
+  border: 1px solid #263143;
+  border-radius: 7px;
+  padding: 8px 10px;
+  background: #111820;
+  color: #e7edf5;
+  font-family:
+    "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.managed-report code {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .overview-band {
@@ -1354,10 +1373,6 @@ h2 {
   .managed-main {
     align-items: flex-start;
     flex-direction: column;
-  }
-
-  .managed-grid {
-    grid-template-columns: 1fr 1fr;
   }
 
   .summary-grid {

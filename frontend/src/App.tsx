@@ -277,6 +277,7 @@ function ManagedModePanel({
 }) {
   const enabled = status?.enabled ?? false;
   const visibleError = error || status?.last_error || null;
+  const reportLines = status?.report_requested_at ? status.steward_tail : [];
 
   return (
     <section className={`managed-panel ${enabled ? "is-on" : ""}`} aria-label="Managed mode">
@@ -287,7 +288,13 @@ function ManagedModePanel({
           </span>
           <div>
             <h2>Managed Mode</h2>
-            <p>{enabled ? "Steward is coordinating active agents" : "Steward is off"}</p>
+            <p>
+              {enabled
+                ? "Conservative steward is supervising active agents"
+                : status?.report_requested_at
+                  ? "Steward report requested"
+                  : "Steward is off"}
+            </p>
           </div>
         </div>
         <button
@@ -297,7 +304,7 @@ function ManagedModePanel({
           onClick={() => void onToggle(!enabled)}
         >
           <Power size={16} />
-          {busy ? "Updating" : enabled ? "Disable" : "Enable"}
+          {busy ? "Updating" : enabled ? "End & report" : "Enable"}
         </button>
       </div>
 
@@ -315,6 +322,10 @@ function ManagedModePanel({
           label="Last Dispatch"
           value={status?.last_dispatch_at ? formatTime(status.last_dispatch_at) : "None"}
         />
+        <ManagedMetric
+          label="Report"
+          value={status?.report_requested_at ? formatTime(status.report_requested_at) : "None"}
+        />
       </div>
 
       {status?.last_summary ? <p className="managed-summary">{status.last_summary}</p> : null}
@@ -328,6 +339,16 @@ function ManagedModePanel({
       ) : null}
 
       {visibleError ? <div className="managed-error">{visibleError}</div> : null}
+
+      {reportLines.length ? (
+        <div className="managed-report" aria-label="Managed mode report tail">
+          {reportLines.map((line, index) => (
+            <div key={`${index}-${line}`}>
+              <code>{line || " "}</code>
+            </div>
+          ))}
+        </div>
+      ) : null}
     </section>
   );
 }

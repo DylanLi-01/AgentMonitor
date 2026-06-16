@@ -107,6 +107,7 @@ class ManagedModeState(BaseModel):
     steward_session: str = Field(default="agentmonitor-steward", min_length=1, max_length=120)
     interval_seconds: int = Field(default=180, ge=30, le=3600)
     last_dispatch_at: Optional[datetime] = None
+    report_requested_at: Optional[datetime] = None
     last_error: Optional[str] = None
     last_summary: str = ""
     last_targets: list[str] = Field(default_factory=list)
@@ -115,3 +116,4 @@ class ManagedModeState(BaseModel):
 
 class ManagedModeStatus(ManagedModeState):
     steward_running: bool = False
+    steward_tail: list[str] = Field(default_factory=list)

@@ -67,11 +67,13 @@ export interface ManagedModeStatus {
   steward_session: string;
   interval_seconds: number;
   last_dispatch_at: string | null;
+  report_requested_at: string | null;
   last_error: string | null;
   last_summary: string;
   last_targets: string[];
   updated_at: string;
   steward_running: boolean;
+  steward_tail: string[];
 }
 
 export interface ManagedModePatch {
