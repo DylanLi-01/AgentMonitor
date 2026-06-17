@@ -141,6 +141,8 @@ class ManagedModeTest(unittest.TestCase):
         self.assertIn("Avoid aggressive development", prompt)
         self.assertIn("For observe_only targets, do not send tmux input", prompt)
         self.assertIn("run the smallest relevant test", prompt)
+        self.assertIn("do not finish the tick with zero tmux input", prompt)
+        self.assertIn("no_nudge_reason", prompt)
         self.assertIn("## idle-agent", prompt)
         self.assertIn("stewardship_action: conservative_nudge_allowed", prompt)
         self.assertIn("## working-agent", prompt)
@@ -202,6 +204,50 @@ class ManagedModeTest(unittest.TestCase):
         self.assertEqual(tmux.sent_keys, [("steward", "Enter")])
         self.assertIn("Managed Mode Final Report", tmux.sent_text[0][1])
         self.assertIn("idle-agent", tmux.sent_text[0][1])
+
+    def test_long_steward_prompt_waits_for_paste_marker_before_enter(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = ManagedModeStore(Path(temp_dir) / "managed.json")
+            tmux = RecordingTmuxClient(
+                ["steward"],
+                capture_outputs=["not pasted yet", "› [Pasted Content 1200 chars]"],
+            )
+            controller = ManagedModeController(
+                store=store,
+                tmux_client=tmux,
+                project_root=Path(temp_dir),
+                summary_provider=lambda: [],
+                tail_provider=lambda name, lines: "",
+                steward_brief_submit_settle_seconds=0,
+                steward_paste_ready_timeout_seconds=1,
+            )
+
+            controller._send_steward_prompt("steward", "x" * 1200)
+
+        self.assertEqual(tmux.sent_keys, [("steward", "Enter")])
+
+    def test_long_steward_prompt_fails_without_paste_marker(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = ManagedModeStore(Path(temp_dir) / "managed.json")
+            tmux = RecordingTmuxClient(
+                ["steward"],
+                capture_outputs=["prompt not visible"],
+            )
+            controller = ManagedModeController(
+                store=store,
+                tmux_client=tmux,
+                project_root=Path(temp_dir),
+                summary_provider=lambda: [],
+                tail_provider=lambda name, lines: "",
+                steward_brief_submit_settle_seconds=0,
+                steward_paste_ready_timeout_seconds=0,
+            )
+
+            with self.assertRaises(ManagedModeError) as context:
+                controller._send_steward_prompt("steward", "x" * 1200)
+
+        self.assertIn("paste was not visible", str(context.exception))
+        self.assertEqual(tmux.sent_keys, [])
 
     def test_enabling_managed_mode_restarts_stale_steward_session(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

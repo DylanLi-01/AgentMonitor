@@ -12,7 +12,7 @@ from typing import Callable, Optional
 from pydantic import ValidationError
 
 from .models import ManagedModeState, ManagedModeStatus, SessionStatus, SessionSummary
-from .tmux_client import TmuxClient, TmuxError
+from .tmux_client import SEND_KEYS_LITERAL_LIMIT, TmuxClient, TmuxError
 
 
 DEFAULT_STEWARD_SESSION = "agentmonitor-steward"
@@ -24,6 +24,8 @@ STEWARD_STARTUP_POLL_SECONDS = 0.2
 STEWARD_STARTUP_SETTLE_SECONDS = 0.8
 STEWARD_RESET_TIMEOUT_SECONDS = 3.0
 STEWARD_RESET_POLL_SECONDS = 0.1
+STEWARD_PASTE_READY_TIMEOUT_SECONDS = 5.0
+STEWARD_PASTE_READY_POLL_SECONDS = 0.1
 CODEX_STARTUP_PROMPT_TIMEOUT_SECONDS = 8.0
 CODEX_STARTUP_PROMPT_POLL_SECONDS = 0.2
 CODEX_STARTUP_PROMPT_SETTLE_SECONDS = 0.4
@@ -34,6 +36,7 @@ CODEX_UPDATE_SKIP_CHOICE = "2"
 CODEX_TRUST_PROMPT_MARKERS = ("Do you trust the contents of this directory?", "Press enter to continue")
 CODEX_TRUST_ACCEPT_CHOICE = "1"
 CODEX_READY_MARKERS = ("OpenAI Codex", "directory:")
+CODEX_PASTED_CONTENT_MARKER = "[Pasted Content"
 MONITOR_OWNED_PREFIXES = ("agentmonitor-", "codex-tmux-monitor")
 CODEX_PANE_COMMANDS = {"codex", "node"}
 ACTIONABLE_STATUSES = {
@@ -121,6 +124,7 @@ class ManagedModeController:
         codex_startup_prompt_timeout_seconds: float = CODEX_STARTUP_PROMPT_TIMEOUT_SECONDS,
         codex_startup_prompt_settle_seconds: float = CODEX_STARTUP_PROMPT_SETTLE_SECONDS,
         steward_brief_submit_settle_seconds: float = STEWARD_BRIEF_SUBMIT_SETTLE_SECONDS,
+        steward_paste_ready_timeout_seconds: float = STEWARD_PASTE_READY_TIMEOUT_SECONDS,
     ) -> None:
         self._store = store
         self._tmux_client = tmux_client
@@ -133,6 +137,7 @@ class ManagedModeController:
         self._codex_startup_prompt_timeout_seconds = codex_startup_prompt_timeout_seconds
         self._codex_startup_prompt_settle_seconds = codex_startup_prompt_settle_seconds
         self._steward_brief_submit_settle_seconds = steward_brief_submit_settle_seconds
+        self._steward_paste_ready_timeout_seconds = steward_paste_ready_timeout_seconds
         self._worker_lock = threading.Lock()
         self._dispatch_lock = threading.Lock()
         self._stop_event = threading.Event()
@@ -263,6 +268,8 @@ class ManagedModeController:
     def _send_steward_prompt(self, name: str, prompt: str) -> None:
         try:
             self._tmux_client.send_text(name, prompt, enter=False)
+            if len(prompt) > SEND_KEYS_LITERAL_LIMIT:
+                self._wait_for_steward_paste_ready(name)
             if self._steward_brief_submit_settle_seconds > 0:
                 time.sleep(self._steward_brief_submit_settle_seconds)
             self._tmux_client.send_key(name, "Enter")
@@ -272,6 +279,29 @@ class ManagedModeController:
                     "Steward session exited before it could receive the stewardship brief."
                 ) from exc
             raise
+
+    def _wait_for_steward_paste_ready(self, name: str) -> None:
+        deadline = time.monotonic() + self._steward_paste_ready_timeout_seconds
+        last_tail = ""
+        while True:
+            if not self._session_exists(name):
+                raise ManagedModeError(
+                    "Steward session exited before the pasted prompt could be submitted."
+                )
+
+            last_tail = self._tmux_client.capture_session(name, lines=CODEX_UPDATE_PROMPT_LINES)
+            if CODEX_PASTED_CONTENT_MARKER in last_tail:
+                return
+
+            if time.monotonic() >= deadline:
+                raise ManagedModeError(
+                    "Steward prompt paste was not visible before submit; not pressing Enter "
+                    "to avoid partial prompt execution. Last steward tail: "
+                    f"{_truncate_text(last_tail, 500)}"
+                )
+
+            remaining = max(0.0, deadline - time.monotonic())
+            time.sleep(min(STEWARD_PASTE_READY_POLL_SECONDS, remaining))
 
     def _reset_steward_session_for_new_run(self, name: str) -> None:
         if not self._session_exists(name):
@@ -426,6 +456,8 @@ def build_steward_prompt(
             "Each target has stewardship_action. For observe_only targets, do not send tmux input; only summarize state.",
             "For conservative_nudge_allowed targets, if they can continue without a human decision, send at most one concise, conservative instruction with tmux send-keys.",
             "Prefer instructions such as: review the recent diff, run the smallest relevant test, inspect logs, reproduce the error, verify the current result, or write a status summary.",
+            "If any conservative_nudge_allowed target exists, do not finish the tick with zero tmux input unless every such target is already actively working, recently nudged, or blocked on human context.",
+            "When you send no tmux input, list a no_nudge_reason for every conservative_nudge_allowed target in your final summary.",
             "If a target needs credentials, product judgment, or missing context, leave it alone and report that.",
             "Do not repeatedly send the same instruction if the tail already shows a recent steward nudge.",
             "When sending to a target, use literal tmux input and then Enter.",
