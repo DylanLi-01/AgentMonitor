@@ -141,8 +141,11 @@ class ManagedModeTest(unittest.TestCase):
         self.assertIn("Avoid aggressive development", prompt)
         self.assertIn("For observe_only targets, do not send tmux input", prompt)
         self.assertIn("run the smallest relevant test", prompt)
+        self.assertIn("For post_completion_review_allowed targets", prompt)
+        self.assertIn("light post-completion review", prompt)
         self.assertIn("do not finish the tick with zero tmux input", prompt)
         self.assertIn("no_nudge_reason", prompt)
+        self.assertIn("no_review_reason", prompt)
         self.assertIn("## idle-agent", prompt)
         self.assertIn("stewardship_action: conservative_nudge_allowed", prompt)
         self.assertIn("## working-agent", prompt)
@@ -154,7 +157,7 @@ class ManagedModeTest(unittest.TestCase):
                     "display_name: done-agent",
                     "group: Project",
                     "status: done",
-                    "stewardship_action: conservative_nudge_allowed",
+                    "stewardship_action: post_completion_review_allowed",
                 ]
             ),
             prompt,

@@ -46,7 +46,6 @@ ACTIONABLE_STATUSES = {
     SessionStatus.PARTIAL,
     SessionStatus.IDLE,
     SessionStatus.UNKNOWN,
-    SessionStatus.DONE,
 }
 MANAGED_STATUS_PRIORITY = {
     SessionStatus.ERROR: 0,
@@ -456,8 +455,11 @@ def build_steward_prompt(
             "Each target has stewardship_action. For observe_only targets, do not send tmux input; only summarize state.",
             "For conservative_nudge_allowed targets, if they can continue without a human decision, send at most one concise, conservative instruction with tmux send-keys.",
             "Prefer instructions such as: review the recent diff, run the smallest relevant test, inspect logs, reproduce the error, verify the current result, or write a status summary.",
-            "If any conservative_nudge_allowed target exists, do not finish the tick with zero tmux input unless every such target is already actively working, recently nudged, or blocked on human context.",
-            "When you send no tmux input, list a no_nudge_reason for every conservative_nudge_allowed target in your final summary.",
+            "For post_completion_review_allowed targets, send at most one light post-completion review instruction if the tail does not already show a recent review.",
+            "A good default review instruction is: Please do a light post-completion review of your recent changes: inspect the recent diff, run the smallest relevant existing check if safe, and report concrete issues or test gaps. Do not start broad new work. Finish with CODEX_STATUS.",
+            "If any conservative_nudge_allowed or post_completion_review_allowed target exists, do not finish the tick with zero tmux input unless every such target is already actively working, recently nudged or reviewed, or blocked on human context.",
+            "When you skip a conservative_nudge_allowed target, list a no_nudge_reason in your final summary.",
+            "When you skip a post_completion_review_allowed target, list a no_review_reason in your final summary.",
             "If a target needs credentials, product judgment, or missing context, leave it alone and report that.",
             "Do not repeatedly send the same instruction if the tail already shows a recent steward nudge.",
             "When sending to a target, use literal tmux input and then Enter.",
@@ -503,6 +505,8 @@ def _is_managed_target(session: SessionSummary, steward_session: str) -> bool:
 
 
 def _stewardship_action(status: SessionStatus) -> str:
+    if status is SessionStatus.DONE:
+        return "post_completion_review_allowed"
     if status in ACTIONABLE_STATUSES:
         return "conservative_nudge_allowed"
     return "observe_only"
